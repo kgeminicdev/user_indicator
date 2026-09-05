@@ -1,58 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { pool } from "@/lib/db";
 import { braintrustPool } from "@/lib/braintrustDb";
+import { extractGithubUsername, findRealCommitterEmail } from "@/lib/githubEmail";
+import { verifyLinkedinUrl } from "@/lib/linkedinVerify";
+import { BRAINTRUST_FILTER } from "@/lib/braintrustFilter";
 
-const NOREPLY_DOMAIN = "users.noreply.github.com";
-const BOT_NOREPLY_EMAIL = "noreply@github.com";
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_CONCURRENCY = 5;
-
-function isRealEmail(email: string | null | undefined): email is string {
-  return Boolean(email) && !email!.endsWith(NOREPLY_DOMAIN) && email !== BOT_NOREPLY_EMAIL;
-}
-
-async function fetchJson(url: string) {
-  const headers: Record<string, string> = GITHUB_TOKEN
-    ? { Authorization: `token ${GITHUB_TOKEN}` }
-    : {};
-  const response = await fetch(url, { headers });
-  if (!response.ok) {
-    throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
-  }
-  return response.json();
-}
-
-function extractGithubUsername(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    if (!parsed.hostname.includes("github.com")) return null;
-    const [username] = parsed.pathname.split("/").filter(Boolean);
-    return username || null;
-  } catch {
-    return null;
-  }
-}
-
-type Repo = { full_name: string };
-type Commit = { commit: { committer: { email: string } } };
-
-async function findRealCommitterEmail(username: string): Promise<string | null> {
-  const repos: Repo[] = await fetchJson(
-    `https://api.github.com/users/${username}/repos?sort=pushed&direction=desc&per_page=100`
-  );
-  if (!Array.isArray(repos) || repos.length === 0) return null;
-
-  for (const repo of repos.slice(0, 10)) {
-    const commits: Commit[] = await fetchJson(
-      `https://api.github.com/repos/${repo.full_name}/commits?author=${username}&per_page=30`
-    ).catch(() => []);
-    for (const commit of commits) {
-      const email = commit.commit.committer.email;
-      if (isRealEmail(email)) return email;
-    }
-  }
-  return null;
-}
 
 type ExternalProfile = { site: { name: string }; public_url: string };
 type Candidate = {
@@ -78,8 +31,7 @@ export async function POST(request: NextRequest) {
       SELECT id, "publicName", data->'external_profiles' AS "externalProfiles"
       FROM "Freelancer"
       WHERE id BETWEEN $1 AND $2
-        AND title = 'Engineering'
-        AND jsonb_array_length(data->'external_profiles') > 0
+        AND ${BRAINTRUST_FILTER}
       ORDER BY id ASC
     `,
     [startId, endId]
@@ -98,6 +50,8 @@ export async function POST(request: NextRequest) {
     name: string | null;
     githubUrl: string | null;
     linkedinUrl: string | null;
+    linkedinVerified: boolean | null;
+    externalProfiles: ExternalProfile[];
     derivedEmail: string | null;
     matched: boolean;
   };
@@ -112,22 +66,25 @@ export async function POST(request: NextRequest) {
         const github = profiles.find((p) => p.site?.name === "GitHub");
         const linkedin = profiles.find((p) => p.site?.name === "LinkedIn");
 
-        if (github && existingLinks.has(github.public_url)) {
-          return {
-            braintrustId: candidate.id,
-            name: candidate.publicName,
-            githubUrl: github.public_url,
-            linkedinUrl: linkedin?.public_url ?? null,
-            derivedEmail: null,
-            matched: true,
-          };
+        // Match against ANY of the candidate's external links, not just
+        // GitHub/LinkedIn — a match on any of them means we already have
+        // this person.
+        let linkedinVerified: boolean | null = null;
+        if (linkedin) {
+          linkedinVerified = await verifyLinkedinUrl(linkedin.public_url)
+            .then((r) => r.valid)
+            .catch(() => null);
         }
-        if (linkedin && existingLinks.has(linkedin.public_url)) {
+
+        const linkMatch = profiles.some((p) => existingLinks.has(p.public_url));
+        if (linkMatch) {
           return {
             braintrustId: candidate.id,
             name: candidate.publicName,
             githubUrl: github?.public_url ?? null,
-            linkedinUrl: linkedin.public_url,
+            linkedinUrl: linkedin?.public_url ?? null,
+            linkedinVerified,
+            externalProfiles: profiles,
             derivedEmail: null,
             matched: true,
           };
@@ -144,11 +101,15 @@ export async function POST(request: NextRequest) {
           derivedEmail && existingEmails.has(derivedEmail.toLowerCase())
         );
 
+        // A LinkedIn link that fails verification is still queued below —
+        // linkedinVerified is stored purely as a signal, never a filter.
         return {
           braintrustId: candidate.id,
           name: candidate.publicName,
           githubUrl: github?.public_url ?? null,
           linkedinUrl: linkedin?.public_url ?? null,
+          linkedinVerified,
+          externalProfiles: profiles,
           derivedEmail,
           matched,
         };
@@ -162,10 +123,26 @@ export async function POST(request: NextRequest) {
   let newlyQueued = 0;
   for (const r of missing) {
     const insertResult = await pool.query(
-      `INSERT INTO todo (braintrust_id, name, github_url, linkedin_url, derived_email)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (braintrust_id) DO NOTHING`,
-      [r.braintrustId, r.name, r.githubUrl, r.linkedinUrl, r.derivedEmail]
+      `INSERT INTO todo (braintrust_id, name, github_url, linkedin_url, linkedin_verified, external_profiles, derived_email)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (braintrust_id) DO UPDATE
+         SET status = 'pending',
+             name = EXCLUDED.name,
+             github_url = EXCLUDED.github_url,
+             linkedin_url = EXCLUDED.linkedin_url,
+             linkedin_verified = EXCLUDED.linkedin_verified,
+             external_profiles = EXCLUDED.external_profiles,
+             derived_email = EXCLUDED.derived_email
+         WHERE todo.status = 'dismissed'`,
+      [
+        r.braintrustId,
+        r.name,
+        r.githubUrl,
+        r.linkedinUrl,
+        r.linkedinVerified,
+        JSON.stringify(r.externalProfiles),
+        r.derivedEmail,
+      ]
     );
     newlyQueued += insertResult.rowCount ?? 0;
   }

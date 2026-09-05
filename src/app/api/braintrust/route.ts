@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { braintrustPool } from "@/lib/braintrustDb";
-
-const FILTER = `title = 'Engineering' AND jsonb_array_length(data->'external_profiles') > 0`;
+import { BRAINTRUST_FILTER as FILTER } from "@/lib/braintrustFilter";
 
 export async function GET() {
   const [

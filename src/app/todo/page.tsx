@@ -2,16 +2,23 @@
 
 import { useEffect, useState } from "react";
 
+type ExternalProfile = { site: { name: string }; public_url: string };
+
 type TodoItem = {
   id: number;
   braintrust_id: number;
   name: string | null;
   github_url: string | null;
   linkedin_url: string | null;
+  linkedin_verified: boolean | null;
+  external_profiles: ExternalProfile[] | null;
   derived_email: string | null;
   status: string;
+  hidden: boolean;
   created_at: string;
 };
+
+type View = "active" | "hidden";
 
 type ScanResult = {
   scanned: number;
@@ -29,8 +36,8 @@ type TodoPageResult = {
   totalPages: number;
 };
 
-function loadTodos(page: number): Promise<TodoPageResult> {
-  return fetch(`/api/todo?page=${page}`).then((res) => {
+function loadTodos(page: number, view: View): Promise<TodoPageResult> {
+  return fetch(`/api/todo?page=${page}&view=${view}`).then((res) => {
     if (!res.ok) throw new Error(`request failed (${res.status})`);
     return res.json();
   });
@@ -44,12 +51,16 @@ export default function TodoPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [view, setView] = useState<View>("active");
 
   const [startId, setStartId] = useState("");
   const [endId, setEndId] = useState("");
   const [scanLoading, setScanLoading] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+
+  const [emailPromptId, setEmailPromptId] = useState<number | null>(null);
+  const [emailPromptValue, setEmailPromptValue] = useState("");
 
   function applyTodoPage(data: TodoPageResult) {
     setItems(data.items);
@@ -58,22 +69,27 @@ export default function TodoPage() {
     setTotal(data.total);
   }
 
-  function refresh(targetPage: number) {
+  function refresh(targetPage: number, targetView: View = view) {
     setLoading(true);
-    return loadTodos(targetPage)
+    return loadTodos(targetPage, targetView)
       .then(applyTodoPage)
       .catch((err) => setError((err as Error).message))
       .finally(() => setLoading(false));
   }
 
   useEffect(() => {
-    loadTodos(1)
+    loadTodos(1, "active")
       .then(applyTodoPage)
       .catch((err) => setError((err as Error).message))
       .finally(() => setLoading(false));
   }, []);
 
-  async function act(id: number, action: "approve" | "dismiss", email?: string) {
+  function handleViewChange(nextView: View) {
+    setView(nextView);
+    refresh(1, nextView);
+  }
+
+  async function act(id: number, action: "approve" | "hide" | "delete", email?: string) {
     setBusyId(id);
     try {
       const res = await fetch(`/api/todo/${id}`, {
@@ -99,11 +115,21 @@ export default function TodoPage() {
       act(item.id, "approve");
       return;
     }
-    const input = window.prompt(
-      `No email found for ${item.name || "this candidate"}. Enter an email to use, or leave blank to add without one.`
+    setEmailPromptId(item.id);
+    setEmailPromptValue("");
+  }
+
+  async function submitEmailPrompt(id: number) {
+    setEmailPromptId(null);
+    await act(id, "approve", emailPromptValue.trim());
+  }
+
+  function handleDelete(item: TodoItem) {
+    const ok = window.confirm(
+      `Permanently delete ${item.name || "this candidate"}? This cannot be undone.`
     );
-    if (input === null) return;
-    act(item.id, "approve", input.trim());
+    if (!ok) return;
+    act(item.id, "delete");
   }
 
   async function handleScan(e: React.FormEvent) {
@@ -144,8 +170,29 @@ export default function TodoPage() {
           <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
             Braintrust users not yet found in your records. Click Confirmed
             to add — if no email was found, you&apos;ll be asked to enter
-            one or continue without it.
+            one or continue without it. Hide tucks a user away (reversible,
+            viewable below); Delete removes them permanently.
           </p>
+          <div className="mt-2 flex items-center gap-4 text-sm">
+            <label className="flex items-center gap-1.5">
+              <input
+                type="radio"
+                name="view"
+                checked={view === "active"}
+                onChange={() => handleViewChange("active")}
+              />
+              Active
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input
+                type="radio"
+                name="view"
+                checked={view === "hidden"}
+                onChange={() => handleViewChange("hidden")}
+              />
+              Removed
+            </label>
+          </div>
         </div>
 
         <form
@@ -193,8 +240,11 @@ export default function TodoPage() {
             Scans Engineering profiles with an external profile in that
             Braintrust ID range, checks them against your records (GitHub
             URL, LinkedIn URL, or a GitHub-derived email), and queues
-            unmatched ones below. Wider ranges take longer and use more
-            GitHub API calls.
+            unmatched ones below. Any LinkedIn link found is also checked
+            against the LinkedIn verify tool and shown as verified or not —
+            an unverified link doesn&apos;t exclude the candidate, it&apos;s
+            just a signal. Wider ranges take longer and use more GitHub API
+            calls.
           </p>
 
           {scanLoading && (
@@ -249,7 +299,9 @@ export default function TodoPage() {
         )}
 
         {!loading && total === 0 && !error && (
-          <p className="text-sm text-zinc-500">Nothing pending.</p>
+          <p className="text-sm text-zinc-500">
+            {view === "active" ? "Nothing pending." : "No removed users."}
+          </p>
         )}
 
         <div className="flex flex-col gap-3">
@@ -271,38 +323,103 @@ export default function TodoPage() {
                   >
                     Braintrust
                   </a>
-                  {item.github_url && (
-                    <a
-                      href={item.github_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 underline dark:text-blue-400"
-                    >
-                      GitHub
-                    </a>
-                  )}
-                  {item.linkedin_url && (
-                    <a
-                      href={item.linkedin_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 underline dark:text-blue-400"
-                    >
-                      LinkedIn
-                    </a>
+                  {item.external_profiles && item.external_profiles.length > 0 ? (
+                    item.external_profiles.map((p, i) => (
+                      <a
+                        key={i}
+                        href={p.public_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 underline dark:text-blue-400"
+                      >
+                        {p.site?.name ?? "Link"}
+                        {p.site?.name === "LinkedIn" &&
+                          item.linkedin_verified !== null &&
+                          (item.linkedin_verified ? " ✓" : " (unverified)")}
+                      </a>
+                    ))
+                  ) : (
+                    <>
+                      {item.github_url && (
+                        <a
+                          href={item.github_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 underline dark:text-blue-400"
+                        >
+                          GitHub
+                        </a>
+                      )}
+                      {item.linkedin_url && (
+                        <a
+                          href={item.linkedin_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 underline dark:text-blue-400"
+                        >
+                          LinkedIn
+                          {item.linkedin_verified !== null &&
+                            (item.linkedin_verified ? " ✓" : " (unverified)")}
+                        </a>
+                      )}
+                    </>
                   )}
                   {item.derived_email && <span>{item.derived_email}</span>}
                 </div>
               </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => handleConfirm(item)}
-                  disabled={busyId === item.id}
-                  className="rounded-full bg-foreground px-4 py-1.5 text-xs font-medium text-background disabled:opacity-40"
-                >
-                  Confirmed
-                </button>
-              </div>
+              {emailPromptId === item.id ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    autoFocus
+                    value={emailPromptValue}
+                    onChange={(e) => setEmailPromptValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") submitEmailPrompt(item.id);
+                      if (e.key === "Escape") setEmailPromptId(null);
+                    }}
+                    placeholder="email (optional)"
+                    className="w-40 rounded border border-black/15 px-2 py-1.5 text-xs dark:border-white/15 dark:bg-zinc-900"
+                  />
+                  <button
+                    onClick={() => submitEmailPrompt(item.id)}
+                    disabled={busyId === item.id}
+                    className="rounded-full bg-foreground px-4 py-1.5 text-xs font-medium text-background disabled:opacity-40"
+                  >
+                    Add
+                  </button>
+                  <button
+                    onClick={() => setEmailPromptId(null)}
+                    className="rounded-full border border-black/15 px-4 py-1.5 text-xs font-medium dark:border-white/15"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleConfirm(item)}
+                    disabled={busyId === item.id}
+                    className="rounded-full bg-foreground px-4 py-1.5 text-xs font-medium text-background disabled:opacity-40"
+                  >
+                    Confirmed
+                  </button>
+                  <button
+                    onClick={() => act(item.id, "hide")}
+                    disabled={busyId === item.id}
+                    className="rounded-full border border-black/15 px-4 py-1.5 text-xs font-medium dark:border-white/15 disabled:opacity-40"
+                  >
+                    Hide
+                  </button>
+                  <button
+                    onClick={() => handleDelete(item)}
+                    disabled={busyId === item.id}
+                    className="rounded-full border border-red-300 px-4 py-1.5 text-xs font-medium text-red-600 dark:border-red-900 dark:text-red-400 disabled:opacity-40"
+                  >
+                    Delete
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -310,7 +427,8 @@ export default function TodoPage() {
         {total > 0 && (
           <div className="flex items-center justify-between text-sm">
             <span className="text-zinc-500">
-              Page {page} of {totalPages} ({total} pending)
+              Page {page} of {totalPages} ({total}{" "}
+              {view === "active" ? "pending" : "removed"})
             </span>
             <div className="flex gap-2">
               <button

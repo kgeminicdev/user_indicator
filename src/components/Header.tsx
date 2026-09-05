@@ -7,6 +7,10 @@ const NAV_ITEMS = [
   { href: "/", label: "Search" },
   { href: "/braintrust", label: "Braintrust" },
   { href: "/todo", label: "To Do" },
+  { href: "/github", label: "GitHub" },
+  { href: "/linkedin", label: "LinkedIn Verify" },
+  { href: "/profile", label: "Profile" },
+  { href: "/vee-profile", label: "Vee Profile" },
 ];
 
 export default function Header() {
