@@ -1,43 +1,38 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { VeeProfileData, VeeMonthYear } from "@/lib/veeProfileData";
-
-const MONTHS = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-
-function formatMonthYear(d: VeeMonthYear | null | undefined): string {
-  if (!d || !d.year) return "Present";
-  return d.month ? `${MONTHS[d.month - 1]} ${d.year}` : `${d.year}`;
-}
-
-function formatDateRange(
-  start: VeeMonthYear,
-  end: VeeMonthYear,
-  isCurrent: boolean
-): string {
-  return `${formatMonthYear(start)} – ${isCurrent ? "Present" : formatMonthYear(end)}`;
-}
+import type { VeeProfileData } from "@/lib/veeProfileData";
+import { formatDateRange, buildVeeApplyContent } from "@/lib/veeProfileFormat";
 
 export default function VeeProfilePanel({
   profileUrl,
+  email,
+  source,
   onClose,
   onLoaded,
+  onAlreadyExists,
 }: {
   profileUrl: string;
+  email?: string | null;
+  source?: "github" | "braintrust" | null;
   onClose?: () => void;
   onLoaded?: () => void;
+  onAlreadyExists?: () => void;
 }) {
   const [data, setData] = useState<VeeProfileData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [applyStatus, setApplyStatus] = useState<"idle" | "saving" | "done" | "error" | "exists">(
+    "idle"
+  );
+  const [applyError, setApplyError] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
     setError(null);
     setData(null);
+    setApplyStatus("idle");
+    setApplyError(null);
     fetch(`/api/vee-profile?url=${encodeURIComponent(profileUrl)}`)
       .then(async (res) => {
         const body = await res.json();
@@ -52,6 +47,68 @@ export default function VeeProfilePanel({
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profileUrl]);
+
+  async function handleCopyAndApplied() {
+    if (!data) return;
+    setApplyStatus("saving");
+    setApplyError(null);
+
+    // Check records first, before touching the clipboard or working
+    // history — if this candidate is already known, there's nothing else
+    // to do here except get them out of view.
+    try {
+      const checkRes = await fetch("/api/check-or-add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email ?? "", link: profileUrl, onlySearch: true }),
+      });
+      const checkBody = await checkRes.json();
+      if (!checkRes.ok) throw new Error(checkBody.error || `request failed (${checkRes.status})`);
+      if (checkBody.exists) {
+        setApplyStatus("exists");
+        onAlreadyExists?.();
+        return;
+      }
+    } catch (err) {
+      setApplyStatus("error");
+      setApplyError((err as Error).message);
+      return;
+    }
+
+    const content = buildVeeApplyContent(data);
+    try {
+      await navigator.clipboard.writeText(content);
+    } catch {
+      // Clipboard access can fail (permissions, insecure context) — still
+      // log it to working history below even if the copy itself didn't work.
+    }
+    try {
+      // Save the profileUrl this panel was opened with (matches
+      // github_us.linkedin_url), not data.common.url — Vee returns its own
+      // current canonical URL for the profile, which can use a different
+      // vanity slug than what was originally stored, so matching on it
+      // would silently fail.
+      const res = await fetch("/api/working-history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: email ?? null,
+          linkedinUrl: profileUrl,
+          content,
+          source: source ?? null,
+          name: data.common.full_name,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json();
+        throw new Error(body.error || `request failed (${res.status})`);
+      }
+      setApplyStatus("done");
+    } catch (err) {
+      setApplyStatus("error");
+      setApplyError((err as Error).message);
+    }
+  }
 
   const common = data?.common;
   const sortedSkills = common
@@ -150,6 +207,27 @@ export default function VeeProfilePanel({
               </div>
             </div>
           </section>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleCopyAndApplied}
+              disabled={applyStatus === "saving" || applyStatus === "exists"}
+              className="rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-40"
+            >
+              {applyStatus === "saving"
+                ? "Saving..."
+                : applyStatus === "done"
+                  ? "Copied & Saved ✓"
+                  : applyStatus === "exists"
+                    ? "Already in Records"
+                    : "Copy and Applied"}
+            </button>
+            {applyStatus === "error" && (
+              <span className="text-xs font-medium text-red-600 dark:text-red-400">
+                Error: {applyError}
+              </span>
+            )}
+          </div>
 
           {common.about && (
             <section>

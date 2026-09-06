@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS github_us (
   already_in_records    BOOLEAN NOT NULL DEFAULT false,
   linkedin_url          TEXT,
   linkedin_verified     BOOLEAN,
+  applied               BOOLEAN NOT NULL DEFAULT false,
+  applied_at            TIMESTAMP,
+  ignored               BOOLEAN NOT NULL DEFAULT false,
   score_total           INTEGER,
   score_breakdown       JSONB,
   scored_at             TIMESTAMP,
@@ -49,6 +52,9 @@ CREATE TABLE IF NOT EXISTS github_us (
 
 ALTER TABLE github_us ADD COLUMN IF NOT EXISTS linkedin_url TEXT;
 ALTER TABLE github_us ADD COLUMN IF NOT EXISTS linkedin_verified BOOLEAN;
+ALTER TABLE github_us ADD COLUMN IF NOT EXISTS applied BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE github_us ADD COLUMN IF NOT EXISTS applied_at TIMESTAMP;
+ALTER TABLE github_us ADD COLUMN IF NOT EXISTS ignored BOOLEAN NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS github_us_searches (
   id                         SERIAL PRIMARY KEY,
@@ -74,3 +80,14 @@ CREATE TABLE IF NOT EXISTS github_us_searches (
 );
 
 ALTER TABLE github_us_searches ADD COLUMN IF NOT EXISTS already_in_braintrust INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS working_history (
+  id            SERIAL PRIMARY KEY,
+  email         TEXT,
+  linkedin_url  TEXT NOT NULL,
+  content       TEXT,
+  source        TEXT,
+  created_at    TIMESTAMP NOT NULL DEFAULT now()
+);
+
+ALTER TABLE working_history ADD COLUMN IF NOT EXISTS source TEXT;

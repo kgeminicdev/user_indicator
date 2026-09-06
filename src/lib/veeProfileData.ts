@@ -173,21 +173,48 @@ async function veeFetch(input: string | URL, init: RequestInit = {}): Promise<Re
   ) as unknown as Promise<Response>;
 }
 
-export async function fetchVeeProfile(profileUrl: string): Promise<VeeProfileData> {
+async function fetchVeeProfileOnce(identifier: string): Promise<Response> {
   const url = new URL(VEE_API_URL);
-  url.searchParams.set("identifier", extractLinkedinIdentifier(profileUrl));
+  url.searchParams.set("identifier", identifier);
   url.searchParams.set("sections", VEE_SECTIONS);
 
   const headers: Record<string, string> = {};
   if (VEE_API_TOKEN) headers.Authorization = `Bearer ${VEE_API_TOKEN}`;
 
-  let response: Response;
-  try {
-    response = await veeFetch(url.toString(), { headers });
-  } catch (err) {
-    throw new VeeProfileError(
-      `Failed to reach Vee lookup service at ${VEE_API_URL}: ${(err as Error).message}`
-    );
+  return veeFetch(url.toString(), { headers });
+}
+
+export async function fetchVeeProfile(profileUrl: string): Promise<VeeProfileData> {
+  const identifier = extractLinkedinIdentifier(profileUrl);
+
+  // A 403 usually means the current proxy IP's daily free-tier credits are
+  // exhausted. Rather than retry once and give up, cycle through every
+  // configured IP — several can be exhausted back-to-back (they're consumed
+  // in list order), so a single retry isn't always enough. Stops as soon as
+  // one IP returns anything other than 403 (success or a different error
+  // worth surfacing directly), rather than waiting for a separate /usage
+  // check to notice and rotate (which never happens from callers that only
+  // ever hit this function).
+  const maxAttempts = Math.max(1, VEE_PROXY_IP_LIST.length);
+  let response: Response | undefined;
+  let lastError: VeeProfileError | undefined;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      response = await fetchVeeProfileOnce(identifier);
+    } catch (err) {
+      lastError = new VeeProfileError(
+        `Failed to reach Vee lookup service at ${VEE_API_URL}: ${(err as Error).message}`
+      );
+      response = undefined;
+    }
+
+    if (response && response.status !== 403) break;
+    if (attempt < maxAttempts) rotateProxyIp();
+  }
+
+  if (!response) {
+    throw lastError ?? new VeeProfileError(`Failed to reach Vee lookup service at ${VEE_API_URL}`);
   }
 
   if (!response.ok) {

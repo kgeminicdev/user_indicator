@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import VeeProfilePanel from "@/components/VeeProfilePanel";
+import type { VeeProfileData } from "@/lib/veeProfileData";
+import { buildVeeApplyContent } from "@/lib/veeProfileFormat";
 
 const MAX_AUTO_RESUME_ATTEMPTS = 5;
 const GENERIC_RETRY_BASE_MS = 30000;
@@ -68,18 +70,6 @@ type SearchHistoryItem = {
   updated_at: string;
 };
 
-type ScoreBreakdown = {
-  usLocation: number;
-  accountAge: number;
-  recentActivity: number;
-  techStackMatch: number;
-  repoQuality: number;
-  reputation: number;
-  contributionConsistency: number;
-  englishBio: number;
-  professionalCompleteness: number;
-};
-
 type SavedGithubUser = {
   id: number;
   name: string | null;
@@ -90,10 +80,10 @@ type SavedGithubUser = {
   already_in_records: boolean;
   linkedin_url: string | null;
   linkedin_verified: boolean | null;
+  applied: boolean;
+  applied_at: string | null;
+  ignored: boolean;
   created_at: string;
-  score_total: number | null;
-  score_breakdown: ScoreBreakdown | null;
-  scored_at: string | null;
   account_created_at: string | null;
   last_pushed_at: string | null;
   public_repos: number | null;
@@ -122,9 +112,14 @@ function loadHistory(): Promise<SearchHistoryItem[]> {
   });
 }
 
-function loadSavedList(page: number, sortByScore: boolean): Promise<SavedListPage> {
+function loadSavedList(
+  page: number,
+  showIgnored: boolean,
+  hideApplied: boolean
+): Promise<SavedListPage> {
   const params = new URLSearchParams({ page: String(page) });
-  if (sortByScore) params.set("sort", "score");
+  if (showIgnored) params.set("showIgnored", "true");
+  if (hideApplied) params.set("hideApplied", "true");
   return fetch(`/api/github/list?${params}`).then((res) => {
     if (!res.ok) throw new Error(`request failed (${res.status})`);
     return res.json();
@@ -145,19 +140,23 @@ export default function GithubSearchPage() {
 
   const [savedList, setSavedList] = useState<SavedListPage | null>(null);
   const [savedListLoading, setSavedListLoading] = useState(true);
-  const [sortByScore, setSortByScore] = useState(false);
-  const [requiredSkills, setRequiredSkills] = useState("");
-  const [scoring, setScoring] = useState(false);
-  const [scoreError, setScoreError] = useState<string | null>(null);
-  const [scoreStatus, setScoreStatus] = useState<string | null>(null);
+  const [showIgnored, setShowIgnored] = useState(false);
+  const [hideApplied, setHideApplied] = useState(true);
   const [selectedLinkedinUrl, setSelectedLinkedinUrl] = useState<string | null>(null);
+  const [selectedEmail, setSelectedEmail] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [applyStatus, setApplyStatus] = useState<Record<string, "saving" | "done" | "error">>({});
+  const [applyErrors, setApplyErrors] = useState<Record<string, string>>({});
+  const [copiedLinkedinUrl, setCopiedLinkedinUrl] = useState<string | null>(null);
 
   const autoResumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoResumeAttemptsRef = useRef(0);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     return () => {
       if (autoResumeTimerRef.current) clearTimeout(autoResumeTimerRef.current);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
     };
   }, []);
 
@@ -165,11 +164,15 @@ export default function GithubSearchPage() {
     loadHistory()
       .then(setHistory)
       .catch(() => {});
-    loadSavedList(1, sortByScore)
+  }, []);
+
+  useEffect(() => {
+    setSavedListLoading(true);
+    loadSavedList(1, showIgnored, hideApplied)
       .then(setSavedList)
       .catch(() => {})
       .finally(() => setSavedListLoading(false));
-  }, [sortByScore]);
+  }, [showIgnored, hideApplied]);
 
   function refreshHistory() {
     loadHistory()
@@ -179,44 +182,21 @@ export default function GithubSearchPage() {
 
   function refreshSavedList(page: number) {
     setSavedListLoading(true);
-    return loadSavedList(page, sortByScore)
+    return loadSavedList(page, showIgnored, hideApplied)
       .then(setSavedList)
       .catch(() => {})
       .finally(() => setSavedListLoading(false));
   }
 
-  async function handleScorePage() {
-    if (!savedList || savedList.items.length === 0) return;
-    setScoring(true);
-    setScoreError(null);
-    setScoreStatus(null);
+  async function handleDeleteHistory(id: number) {
+    const ok = window.confirm("Delete this search history entry? This cannot be undone.");
+    if (!ok) return;
     try {
-      const skills = requiredSkills
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-      const res = await fetch("/api/github/score", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ids: savedList.items.map((u) => u.id),
-          requiredSkills: skills,
-        }),
-      });
+      const res = await fetch(`/api/github/searches/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(`request failed (${res.status})`);
-      const data: { results: { id: number; total: number | null; error: string | null }[] } =
-        await res.json();
-      const failed = data.results.filter((r) => r.error);
-      const scored = data.results.filter((r) => !r.error);
-      setScoreStatus(
-        `Scored ${scored.length} of ${data.results.length}.` +
-          (failed.length > 0 ? ` ${failed.length} failed (e.g. ${failed[0].error}).` : "")
-      );
-      await refreshSavedList(savedList.page);
+      refreshHistory();
     } catch (err) {
-      setScoreError((err as Error).message);
-    } finally {
-      setScoring(false);
+      setError((err as Error).message);
     }
   }
 
@@ -312,6 +292,105 @@ export default function GithubSearchPage() {
     startStream(new URLSearchParams({ resumeId: String(id) }));
   }
 
+  async function handleCopyLinkedin(linkedinUrl: string) {
+    try {
+      await navigator.clipboard.writeText(linkedinUrl);
+    } catch {
+      // Clipboard access can fail (permissions, insecure context) — the
+      // "Copied" feedback below is best-effort either way.
+    }
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    setCopiedLinkedinUrl(linkedinUrl);
+    copiedTimerRef.current = setTimeout(() => setCopiedLinkedinUrl(null), 1500);
+  }
+
+  async function handleCopyAndApplied(
+    linkedinUrl: string,
+    email: string | null,
+    removeFromView: () => void
+  ) {
+    setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "saving" }));
+    setApplyErrors((prev) => {
+      const next = { ...prev };
+      delete next[linkedinUrl];
+      return next;
+    });
+
+    // Check records first, before spending a Vee lookup credit — if this
+    // candidate is already known, there's nothing else to do here except
+    // get them out of view.
+    try {
+      const checkRes = await fetch("/api/check-or-add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email ?? "", link: linkedinUrl, onlySearch: true }),
+      });
+      const checkBody = await checkRes.json();
+      if (!checkRes.ok) throw new Error(checkBody.error || `request failed (${checkRes.status})`);
+      if (checkBody.exists) {
+        removeFromView();
+        return;
+      }
+    } catch (err) {
+      setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "error" }));
+      setApplyErrors((prev) => ({ ...prev, [linkedinUrl]: (err as Error).message }));
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/vee-profile?url=${encodeURIComponent(linkedinUrl)}`);
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `request failed (${res.status})`);
+      const profile = body as VeeProfileData;
+      const content = buildVeeApplyContent(profile);
+
+      try {
+        await navigator.clipboard.writeText(content);
+      } catch {
+        // Clipboard access can fail (permissions, insecure context) — still
+        // log it to working history even if the copy itself didn't work.
+      }
+
+      // Save the linkedinUrl we already had on file (matches github_us),
+      // not profile.common.url — Vee returns its own current canonical URL
+      // for the profile, which can use a different vanity slug than what
+      // was originally stored, so matching on it would silently fail.
+      const saveRes = await fetch("/api/working-history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          linkedinUrl,
+          content,
+          source: "github",
+          name: profile.common.full_name,
+        }),
+      });
+      if (!saveRes.ok) {
+        const saveBody = await saveRes.json();
+        throw new Error(saveBody.error || `request failed (${saveRes.status})`);
+      }
+      setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "done" }));
+    } catch (err) {
+      setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "error" }));
+      setApplyErrors((prev) => ({ ...prev, [linkedinUrl]: (err as Error).message }));
+    }
+  }
+
+  async function handleIgnore(id: number, ignore: boolean) {
+    try {
+      const res = await fetch(`/api/github/${id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: ignore ? "ignore" : "unignore" }),
+      });
+      if (!res.ok) throw new Error(`request failed (${res.status})`);
+      await refreshSavedList(savedList?.page ?? 1);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
   return (
     <div className="flex min-h-screen bg-zinc-50 font-sans dark:bg-black">
       <div className="flex flex-1 justify-center">
@@ -386,27 +465,6 @@ export default function GithubSearchPage() {
               {loading ? "Searching..." : "Search"}
             </button>
           </div>
-          <p className="text-xs text-zinc-500">
-            Queries GitHub&apos;s user search: location:&quot;…&quot;
-            created:&lt;cutoff type:User. GitHub caps each query at 1,000
-            results, so to cover every match the created-date range is
-            automatically split into narrower windows until each one is
-            under that cap. Users already saved from a previous search are
-            skipped without a lookup, and anyone already a Braintrust
-            freelancer (matched by their GitHub profile link) is skipped too;
-            new ones are checked for a real, non-noreply email (from their
-            profile or public commits) and saved to the github table —
-            accounts with no findable email are left out. Broad locations can
-            mean many windows and a long run.
-            Progress is saved as it goes, so an interrupted search (rate
-            limit, server restart, closed tab) can be resumed exactly where
-            it left off from the history list below. The LinkedIn filter is
-            rare in practice — almost no GitHub profiles link LinkedIn
-            anywhere, so expect very few (often zero) matches with it on.
-            &quot;Active in the last year&quot; checks the date of their most
-            recent push to any repo.
-          </p>
-
           {progress && (
             <div className="flex items-center gap-2 rounded-lg border border-black/10 bg-black/[.02] px-3 py-2 text-sm text-zinc-600 dark:border-white/10 dark:bg-white/[.03] dark:text-zinc-400">
               <span
@@ -484,7 +542,7 @@ export default function GithubSearchPage() {
                     height={32}
                     className="rounded-full"
                   />
-                  <div className="flex flex-col">
+                  <div className="flex flex-1 flex-col">
                     <span className="font-medium text-black dark:text-zinc-50">
                       {user.name || user.login}
                     </span>
@@ -494,34 +552,72 @@ export default function GithubSearchPage() {
                       {user.linkedinUrl && (
                         <>
                           {" · "}
-                          <a
-                            href={user.linkedinUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-blue-600 underline dark:text-blue-400"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            LinkedIn{user.linkedinVerified && " ✓"}
-                          </a>{" "}
                           <button
                             onClick={(e) => {
                               e.preventDefault();
                               e.stopPropagation();
-                              setSelectedLinkedinUrl(user.linkedinUrl);
+                              handleCopyLinkedin(user.linkedinUrl as string);
                             }}
-                            className="rounded-full border border-black/15 px-2 py-0.5 text-[10px] font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
+                            className="text-blue-600 underline dark:text-blue-400"
                           >
-                            View
+                            {copiedLinkedinUrl === user.linkedinUrl
+                              ? "Copied ✓"
+                              : `LinkedIn${user.linkedinVerified ? " ✓" : ""}`}
                           </button>
                         </>
                       )}
                       {user.lastPushedAt &&
                         ` · last active ${new Date(user.lastPushedAt).toLocaleDateString()}`}
                     </span>
+                    {user.linkedinUrl &&
+                      applyStatus[user.linkedinUrl] === "error" &&
+                      applyErrors[user.linkedinUrl] && (
+                        <span className="mt-0.5 text-[11px] font-medium text-red-600 dark:text-red-400">
+                          {applyErrors[user.linkedinUrl]}
+                        </span>
+                      )}
                   </div>
-                  <span className="ml-auto text-xs text-zinc-500">
-                    score {user.score.toFixed(1)}
-                  </span>
+                  {user.linkedinUrl && (
+                    <div className="ml-auto flex shrink-0 items-center gap-2">
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setSelectedLinkedinUrl(user.linkedinUrl);
+                          setSelectedEmail(user.email);
+                          setSelectedId(null);
+                        }}
+                        className="rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
+                      >
+                        View
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const linkedinUrl = user.linkedinUrl as string;
+                          handleCopyAndApplied(linkedinUrl, user.email, () =>
+                            setResult((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    items: prev.items.filter((x) => x.linkedinUrl !== linkedinUrl),
+                                  }
+                                : prev
+                            )
+                          );
+                        }}
+                        disabled={applyStatus[user.linkedinUrl as string] === "saving"}
+                        className="rounded-full bg-foreground px-3 py-1.5 text-xs font-medium text-background disabled:opacity-40"
+                      >
+                        {applyStatus[user.linkedinUrl as string] === "saving"
+                          ? "Saving..."
+                          : applyStatus[user.linkedinUrl as string] === "done"
+                            ? "Copied & Saved ✓"
+                            : "Copy and Applied"}
+                      </button>
+                    </div>
+                  )}
                 </a>
               ))}
               {result.items.length === 0 && (
@@ -586,15 +682,23 @@ export default function GithubSearchPage() {
                       {h.error_message && ` Last stopped: ${h.error_message}`}
                     </div>
                   </div>
-                  {h.status !== "completed" && (
+                  <div className="flex gap-2">
+                    {h.status !== "completed" && (
+                      <button
+                        onClick={() => handleResume(h.id)}
+                        disabled={loading}
+                        className="rounded-full bg-foreground px-4 py-1.5 text-xs font-medium text-background disabled:opacity-40"
+                      >
+                        Resume
+                      </button>
+                    )}
                     <button
-                      onClick={() => handleResume(h.id)}
-                      disabled={loading}
-                      className="rounded-full bg-foreground px-4 py-1.5 text-xs font-medium text-background disabled:opacity-40"
+                      onClick={() => handleDeleteHistory(h.id)}
+                      className="rounded-full border border-red-300 px-4 py-1.5 text-xs font-medium text-red-600 dark:border-red-900 dark:text-red-400"
                     >
-                      Resume
+                      Delete
                     </button>
-                  )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -606,49 +710,24 @@ export default function GithubSearchPage() {
             <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
               Saved GitHub Users
             </h2>
-            <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
-              <input
-                type="checkbox"
-                checked={sortByScore}
-                onChange={(e) => setSortByScore(e.target.checked)}
-              />
-              Sort by score
-            </label>
-          </div>
-
-          <div className="mb-3 flex flex-wrap items-end gap-3 rounded-lg border border-black/10 p-3 dark:border-white/10">
-            <label className="flex flex-col gap-1 text-sm">
-              Required tech (comma-separated)
-              <input
-                type="text"
-                value={requiredSkills}
-                onChange={(e) => setRequiredSkills(e.target.value)}
-                placeholder="TypeScript, React, AWS"
-                disabled={scoring}
-                className="w-72 rounded border border-black/15 px-3 py-2 text-sm dark:border-white/15 dark:bg-zinc-900 disabled:opacity-50"
-              />
-            </label>
-            <button
-              onClick={handleScorePage}
-              disabled={scoring || !savedList || savedList.items.length === 0}
-              className="flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-40"
-            >
-              {scoring && (
-                <span
-                  aria-hidden
-                  className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-background/40 border-t-background"
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
+                <input
+                  type="checkbox"
+                  checked={hideApplied}
+                  onChange={(e) => setHideApplied(e.target.checked)}
                 />
-              )}
-              {scoring ? "Scoring..." : "Score this page"}
-            </button>
-            {scoreStatus && (
-              <span className="text-xs text-zinc-500">{scoreStatus}</span>
-            )}
-            {scoreError && (
-              <span className="text-xs font-medium text-red-600 dark:text-red-400">
-                Error: {scoreError}
-              </span>
-            )}
+                Hide copied
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
+                <input
+                  type="checkbox"
+                  checked={showIgnored}
+                  onChange={(e) => setShowIgnored(e.target.checked)}
+                />
+                Show ignored
+              </label>
+            </div>
           </div>
 
           {savedListLoading && <p className="text-sm text-zinc-500">Loading...</p>}
@@ -659,7 +738,9 @@ export default function GithubSearchPage() {
                 {savedList.items.map((u) => (
                   <div
                     key={u.id}
-                    className="flex items-center gap-3 rounded-lg border border-black/10 p-3 text-sm dark:border-white/10"
+                    className={`flex items-center gap-3 rounded-lg border border-black/10 p-3 text-sm dark:border-white/10 ${
+                      u.ignored ? "opacity-50" : ""
+                    }`}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
@@ -669,7 +750,7 @@ export default function GithubSearchPage() {
                       height={32}
                       className="rounded-full bg-black/10 dark:bg-white/10"
                     />
-                    <div className="flex flex-col">
+                    <div className="flex flex-1 flex-col">
                       <a
                         href={u.github_link}
                         target="_blank"
@@ -685,43 +766,68 @@ export default function GithubSearchPage() {
                         {u.last_pushed_at &&
                           ` · last active ${new Date(u.last_pushed_at).toLocaleDateString()}`}
                         {u.is_likely_authentic === false && " · flagged inauthentic"}
+                        {u.ignored && " · ignored"}
                         {u.linkedin_url && (
                           <>
                             {" · "}
-                            <a
-                              href={u.linkedin_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
+                            <button
+                              onClick={() => handleCopyLinkedin(u.linkedin_url as string)}
                               className="text-blue-600 underline dark:text-blue-400"
                             >
-                              LinkedIn{u.linkedin_verified && " ✓"}
-                            </a>{" "}
-                            <button
-                              onClick={() => setSelectedLinkedinUrl(u.linkedin_url)}
-                              className="rounded-full border border-black/15 px-2 py-0.5 text-[10px] font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
-                            >
-                              View
+                              {copiedLinkedinUrl === u.linkedin_url
+                                ? "Copied ✓"
+                                : `LinkedIn${u.linkedin_verified ? " ✓" : ""}`}
                             </button>
                           </>
                         )}
                       </span>
-                      {u.score_breakdown && (
-                        <span className="mt-0.5 text-[11px] text-zinc-400">
-                          US {u.score_breakdown.usLocation} · age{" "}
-                          {u.score_breakdown.accountAge} · activity{" "}
-                          {u.score_breakdown.recentActivity} · tech{" "}
-                          {u.score_breakdown.techStackMatch} · repos{" "}
-                          {u.score_breakdown.repoQuality} · rep{" "}
-                          {u.score_breakdown.reputation} · consistency{" "}
-                          {u.score_breakdown.contributionConsistency} · bio{" "}
-                          {u.score_breakdown.englishBio} · profile{" "}
-                          {u.score_breakdown.professionalCompleteness}
-                        </span>
-                      )}
+                      {u.linkedin_url &&
+                        applyStatus[u.linkedin_url] === "error" &&
+                        applyErrors[u.linkedin_url] && (
+                          <span className="mt-0.5 text-[11px] font-medium text-red-600 dark:text-red-400">
+                            {applyErrors[u.linkedin_url]}
+                          </span>
+                        )}
                     </div>
-                    <span className="ml-auto text-sm font-medium text-zinc-600 dark:text-zinc-400">
-                      {u.score_total !== null ? `${u.score_total}/100` : "unscored"}
-                    </span>
+                    <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+                      {u.linkedin_url && (
+                        <>
+                          <button
+                            onClick={() => {
+                              setSelectedLinkedinUrl(u.linkedin_url);
+                              setSelectedEmail(u.email);
+                              setSelectedId(u.id);
+                            }}
+                            className="rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
+                          >
+                            View
+                          </button>
+                          <button
+                            onClick={() =>
+                              handleCopyAndApplied(u.linkedin_url as string, u.email, () =>
+                                handleIgnore(u.id, true)
+                              )
+                            }
+                            disabled={
+                              u.applied || applyStatus[u.linkedin_url as string] === "saving"
+                            }
+                            className="rounded-full bg-foreground px-3 py-1.5 text-xs font-medium text-background disabled:opacity-40"
+                          >
+                            {u.applied || applyStatus[u.linkedin_url as string] === "done"
+                              ? "Copied & Saved ✓"
+                              : applyStatus[u.linkedin_url as string] === "saving"
+                                ? "Saving..."
+                                : "Copy and Applied"}
+                          </button>
+                        </>
+                      )}
+                      <button
+                        onClick={() => handleIgnore(u.id, !u.ignored)}
+                        className="rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
+                      >
+                        {u.ignored ? "Unignore" : "Ignore"}
+                      </button>
+                    </div>
                   </div>
                 ))}
                 {savedList.items.length === 0 && (
@@ -762,7 +868,30 @@ export default function GithubSearchPage() {
         <aside className="sticky top-0 h-screen w-1/2 shrink-0 overflow-y-auto border-l border-black/10 bg-white dark:border-white/10 dark:bg-zinc-950">
           <VeeProfilePanel
             profileUrl={selectedLinkedinUrl}
-            onClose={() => setSelectedLinkedinUrl(null)}
+            email={selectedEmail}
+            source="github"
+            onClose={() => {
+              setSelectedLinkedinUrl(null);
+              setSelectedEmail(null);
+              setSelectedId(null);
+            }}
+            onAlreadyExists={() => {
+              if (selectedId != null) {
+                handleIgnore(selectedId, true);
+              } else {
+                setResult((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        items: prev.items.filter((x) => x.linkedinUrl !== selectedLinkedinUrl),
+                      }
+                    : prev
+                );
+              }
+              setSelectedLinkedinUrl(null);
+              setSelectedEmail(null);
+              setSelectedId(null);
+            }}
           />
         </aside>
       )}
