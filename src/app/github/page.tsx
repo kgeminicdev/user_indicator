@@ -148,15 +148,18 @@ export default function GithubSearchPage() {
   const [applyStatus, setApplyStatus] = useState<Record<string, "saving" | "done" | "error">>({});
   const [applyErrors, setApplyErrors] = useState<Record<string, string>>({});
   const [copiedLinkedinUrl, setCopiedLinkedinUrl] = useState<string | null>(null);
+  const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
 
   const autoResumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoResumeAttemptsRef = useRef(0);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copiedEmailTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     return () => {
       if (autoResumeTimerRef.current) clearTimeout(autoResumeTimerRef.current);
       if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+      if (copiedEmailTimerRef.current) clearTimeout(copiedEmailTimerRef.current);
     };
   }, []);
 
@@ -302,6 +305,18 @@ export default function GithubSearchPage() {
     if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
     setCopiedLinkedinUrl(linkedinUrl);
     copiedTimerRef.current = setTimeout(() => setCopiedLinkedinUrl(null), 1500);
+  }
+
+  async function handleCopyEmail(email: string) {
+    try {
+      await navigator.clipboard.writeText(email);
+    } catch {
+      // Clipboard access can fail (permissions, insecure context) — the
+      // "Copied" feedback below is best-effort either way.
+    }
+    if (copiedEmailTimerRef.current) clearTimeout(copiedEmailTimerRef.current);
+    setCopiedEmail(email);
+    copiedEmailTimerRef.current = setTimeout(() => setCopiedEmail(null), 1500);
   }
 
   async function handleCopyAndApplied(
@@ -547,7 +562,18 @@ export default function GithubSearchPage() {
                       {user.name || user.login}
                     </span>
                     <span className="text-xs text-zinc-500">
-                      {user.email}
+                      {user.email && (
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleCopyEmail(user.email);
+                          }}
+                          className="underline"
+                        >
+                          {copiedEmail === user.email ? "Copied ✓" : user.email}
+                        </button>
+                      )}
                       {user.location && ` · ${user.location}`}
                       {user.linkedinUrl && (
                         <>
@@ -760,7 +786,16 @@ export default function GithubSearchPage() {
                         {u.name || u.github_link}
                       </a>
                       <span className="text-xs text-zinc-500">
-                        {u.email ?? "no email"}
+                        {u.email ? (
+                          <button
+                            onClick={() => handleCopyEmail(u.email as string)}
+                            className="underline"
+                          >
+                            {copiedEmail === u.email ? "Copied ✓" : u.email}
+                          </button>
+                        ) : (
+                          "no email"
+                        )}
                         {u.location && ` · ${u.location}`}
                         {u.primary_language && ` · ${u.primary_language}`}
                         {u.last_pushed_at &&

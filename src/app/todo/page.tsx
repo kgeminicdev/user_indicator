@@ -386,7 +386,7 @@ export default function TodoPage() {
                   key={item.id}
                   className="flex flex-col gap-2 rounded-lg border border-black/10 p-4 text-sm dark:border-white/10 sm:flex-row sm:items-center sm:justify-between"
                 >
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <div className="font-medium text-black dark:text-zinc-50">
                       {item.name || "—"}
                     </div>
@@ -479,7 +479,7 @@ export default function TodoPage() {
                       </button>
                     </div>
                   ) : (
-                    <div className="flex flex-wrap items-center justify-end gap-2">
+                    <div className="flex shrink-0 flex-nowrap items-center justify-end gap-2">
                       {linkedinUrl && (
                         <>
                           <button

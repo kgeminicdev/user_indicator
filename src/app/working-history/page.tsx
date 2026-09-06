@@ -9,6 +9,8 @@ type WorkingHistoryItem = {
   content: string | null;
   source: string | null;
   created_at: string;
+  read_at: string | null;
+  interviewed_at: string | null;
 };
 
 type WorkingHistoryPage = {
@@ -19,11 +21,32 @@ type WorkingHistoryPage = {
   totalPages: number;
 };
 
+type RecordStats = {
+  read: number;
+  interviewed: number;
+};
+
 function loadWorkingHistory(page: number, from: string, to: string): Promise<WorkingHistoryPage> {
   const params = new URLSearchParams({ page: String(page) });
   if (from) params.set("from", from);
   if (to) params.set("to", to);
   return fetch(`/api/working-history?${params}`).then((res) => {
+    if (!res.ok) throw new Error(`request failed (${res.status})`);
+    return res.json();
+  });
+}
+
+function todayStr(): string {
+  const d = new Date();
+  const offset = d.getTimezoneOffset();
+  return new Date(d.getTime() - offset * 60000).toISOString().slice(0, 10);
+}
+
+function loadRecordStats(from: string, to: string): Promise<RecordStats> {
+  const params = new URLSearchParams();
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  return fetch(`/api/working-history/stats?${params}`).then((res) => {
     if (!res.ok) throw new Error(`request failed (${res.status})`);
     return res.json();
   });
@@ -37,6 +60,12 @@ export default function WorkingHistoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
+  const [recordStats, setRecordStats] = useState<RecordStats | null>(null);
+
+  const [markEmail, setMarkEmail] = useState("");
+  const [markStatus, setMarkStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
+  const [markMessage, setMarkMessage] = useState<string | null>(null);
+
   function refresh(page: number) {
     setLoading(true);
     setError(null);
@@ -46,10 +75,40 @@ export default function WorkingHistoryPage() {
       .finally(() => setLoading(false));
   }
 
+  function refreshStats() {
+    loadRecordStats(from, to)
+      .then(setRecordStats)
+      .catch(() => {});
+  }
+
   useEffect(() => {
     refresh(1);
+    refreshStats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to]);
+
+  async function handleMark(status: "read" | "interviewed") {
+    const email = markEmail.trim();
+    if (!email) return;
+    setMarkStatus("saving");
+    setMarkMessage(null);
+    try {
+      const res = await fetch("/api/working-history/mark", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, status }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `request failed (${res.status})`);
+      setMarkStatus("done");
+      setMarkMessage(`Marked ${email} as ${status}.`);
+      setMarkEmail("");
+      refreshStats();
+    } catch (err) {
+      setMarkStatus("error");
+      setMarkMessage((err as Error).message);
+    }
+  }
 
   return (
     <div className="flex flex-col min-h-screen items-center bg-zinc-50 font-sans dark:bg-black">
@@ -82,6 +141,20 @@ export default function WorkingHistoryPage() {
               className="rounded border border-black/15 px-3 py-2 text-sm dark:border-white/15 dark:bg-zinc-900"
             />
           </label>
+          <button
+            onClick={() => {
+              const t = todayStr();
+              setFrom(t);
+              setTo(t);
+            }}
+            className={`rounded-full border px-4 py-2 text-xs font-medium ${
+              from === todayStr() && to === todayStr()
+                ? "border-transparent bg-foreground text-background"
+                : "border-black/15 dark:border-white/15"
+            }`}
+          >
+            Today
+          </button>
           {(from || to) && (
             <button
               onClick={() => {
@@ -95,16 +168,64 @@ export default function WorkingHistoryPage() {
           )}
         </div>
 
-        {data && (
-          <div className="rounded-lg border border-black/10 p-4 dark:border-white/10">
-            <div className="text-3xl font-semibold text-black dark:text-zinc-50">
-              {data.total.toLocaleString()}
-            </div>
-            <div className="text-xs text-zinc-500">
-              {from || to ? "users done in the selected range" : "users done total"}
-            </div>
-          </div>
-        )}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {data && (
+            <StatBlock
+              value={data.total}
+              label={from || to ? "applied in range" : "applied total"}
+            />
+          )}
+          {recordStats && (
+            <>
+              <StatBlock
+                value={recordStats.read}
+                label={from || to ? "read in range" : "read total"}
+              />
+              <StatBlock
+                value={recordStats.interviewed}
+                label={from || to ? "interviewed in range" : "interviewed total"}
+              />
+            </>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-end gap-3 rounded-lg border border-black/10 p-4 dark:border-white/10">
+          <label className="flex flex-col gap-1 text-sm">
+            Email
+            <input
+              type="email"
+              value={markEmail}
+              onChange={(e) => setMarkEmail(e.target.value)}
+              placeholder="candidate@example.com"
+              className="w-64 rounded border border-black/15 px-3 py-2 text-sm dark:border-white/15 dark:bg-zinc-900"
+            />
+          </label>
+          <button
+            onClick={() => handleMark("read")}
+            disabled={markStatus === "saving" || !markEmail.trim()}
+            className="rounded-full border border-black/15 px-4 py-2 text-sm font-medium dark:border-white/15 disabled:opacity-40"
+          >
+            Mark as Read
+          </button>
+          <button
+            onClick={() => handleMark("interviewed")}
+            disabled={markStatus === "saving" || !markEmail.trim()}
+            className="rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-40"
+          >
+            Mark as Interviewed
+          </button>
+          {markMessage && (
+            <span
+              className={`text-xs font-medium ${
+                markStatus === "error"
+                  ? "text-red-600 dark:text-red-400"
+                  : "text-zinc-500"
+              }`}
+            >
+              {markMessage}
+            </span>
+          )}
+        </div>
 
         {loading && <p className="text-sm text-zinc-500">Loading...</p>}
         {error && (
@@ -121,6 +242,8 @@ export default function WorkingHistoryPage() {
                     <th className="whitespace-nowrap px-3 py-2 font-medium">LinkedIn</th>
                     <th className="whitespace-nowrap px-3 py-2 font-medium">Source</th>
                     <th className="whitespace-nowrap px-3 py-2 font-medium">Created</th>
+                    <th className="whitespace-nowrap px-3 py-2 font-medium">Read</th>
+                    <th className="whitespace-nowrap px-3 py-2 font-medium">Interviewed</th>
                     <th className="whitespace-nowrap px-3 py-2 font-medium">Content</th>
                   </tr>
                 </thead>
@@ -145,6 +268,30 @@ export default function WorkingHistoryPage() {
                         <td className="whitespace-nowrap px-3 py-2 text-xs text-zinc-500">
                           {new Date(item.created_at).toLocaleString()}
                         </td>
+                        <td className="whitespace-nowrap px-3 py-2 text-xs">
+                          {item.read_at ? (
+                            <span
+                              title={new Date(item.read_at).toLocaleString()}
+                              className="text-green-600 dark:text-green-400"
+                            >
+                              ✓ {new Date(item.read_at).toLocaleDateString()}
+                            </span>
+                          ) : (
+                            <span className="text-zinc-400">—</span>
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2 text-xs">
+                          {item.interviewed_at ? (
+                            <span
+                              title={new Date(item.interviewed_at).toLocaleString()}
+                              className="text-green-600 dark:text-green-400"
+                            >
+                              ✓ {new Date(item.interviewed_at).toLocaleDateString()}
+                            </span>
+                          ) : (
+                            <span className="text-zinc-400">—</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2">
                           {item.content ? (
                             <button
@@ -162,7 +309,7 @@ export default function WorkingHistoryPage() {
                       </tr>
                       {expandedId === item.id && item.content && (
                         <tr className="border-b border-black/5 dark:border-white/5">
-                          <td colSpan={5} className="px-3 py-2">
+                          <td colSpan={7} className="px-3 py-2">
                             <p className="whitespace-pre-line rounded-lg border border-black/10 p-3 text-xs text-zinc-600 dark:border-white/10 dark:text-zinc-400">
                               {item.content}
                             </p>
@@ -204,6 +351,17 @@ export default function WorkingHistoryPage() {
           </>
         )}
       </main>
+    </div>
+  );
+}
+
+function StatBlock({ value, label }: { value: number; label: string }) {
+  return (
+    <div className="rounded-lg border border-black/10 p-4 dark:border-white/10">
+      <div className="text-3xl font-semibold text-black dark:text-zinc-50">
+        {value.toLocaleString()}
+      </div>
+      <div className="text-xs text-zinc-500">{label}</div>
     </div>
   );
 }

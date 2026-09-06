@@ -7,7 +7,8 @@
     "dev:turbo": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "github:search": "node scripts/run-github-search.js"
   },
   "dependencies": {
     "next": "16.3.3",

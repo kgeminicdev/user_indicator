@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
 
   const [itemsResult, countResult] = await Promise.all([
     pool.query(
-      `SELECT id, email, linkedin_url, content, source, created_at
+      `SELECT id, email, linkedin_url, content, source, created_at, read_at, interviewed_at
        FROM working_history
        ${whereClause}
        ORDER BY created_at DESC

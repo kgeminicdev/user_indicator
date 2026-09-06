@@ -1,9 +1,9 @@
 CREATE TABLE IF NOT EXISTS records (
-  id     SERIAL PRIMARY KEY,
-  name   TEXT NOT NULL,
-  email  TEXT,
-  link   TEXT,
-  other  TEXT
+  id               SERIAL PRIMARY KEY,
+  name             TEXT NOT NULL,
+  email            TEXT,
+  link             TEXT,
+  other            TEXT
 );
 
 CREATE TABLE IF NOT EXISTS todo (
@@ -82,12 +82,16 @@ CREATE TABLE IF NOT EXISTS github_us_searches (
 ALTER TABLE github_us_searches ADD COLUMN IF NOT EXISTS already_in_braintrust INTEGER NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS working_history (
-  id            SERIAL PRIMARY KEY,
-  email         TEXT,
-  linkedin_url  TEXT NOT NULL,
-  content       TEXT,
-  source        TEXT,
-  created_at    TIMESTAMP NOT NULL DEFAULT now()
+  id              SERIAL PRIMARY KEY,
+  email           TEXT,
+  linkedin_url    TEXT NOT NULL,
+  content         TEXT,
+  source          TEXT,
+  read_at         TIMESTAMP,
+  interviewed_at  TIMESTAMP,
+  created_at      TIMESTAMP NOT NULL DEFAULT now()
 );
 
 ALTER TABLE working_history ADD COLUMN IF NOT EXISTS source TEXT;
+ALTER TABLE working_history ADD COLUMN IF NOT EXISTS read_at TIMESTAMP;
+ALTER TABLE working_history ADD COLUMN IF NOT EXISTS interviewed_at TIMESTAMP;
