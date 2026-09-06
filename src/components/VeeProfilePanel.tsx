@@ -84,15 +84,15 @@ export default function VeeProfilePanel({
 
       {data && common && (
         <>
-          <section className="flex flex-col gap-4 rounded-lg border border-black/10 p-4 dark:border-white/10">
+          <section className="flex flex-row gap-4 rounded-lg border border-black/10 p-4 dark:border-white/10">
             {common.image_url && (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={common.image_url}
                 alt=""
-                width={72}
-                height={72}
-                className="h-18 w-18 shrink-0 rounded-full bg-black/10 object-cover dark:bg-white/10"
+                width={140}
+                height={140}
+                className="h-[140px] w-[140px] shrink-0 rounded-full bg-black/10 object-cover dark:bg-white/10"
               />
             )}
             <div className="flex flex-1 flex-col gap-1">
