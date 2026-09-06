@@ -65,12 +65,28 @@ function midpointDate(startStr: string, endStr: string): string {
   return new Date(s + Math.floor((e - s) / 2)).toISOString().slice(0, 10);
 }
 
+const NETWORK_RETRY_ATTEMPTS = 3;
+
+// Retries only on network-level failures (DNS blips, connection resets —
+// fetch() throwing before any response comes back), not on HTTP error
+// responses, which are handled separately (rate limits, 4xx/5xx) below.
+async function fetchWithRetry(url: string, headers: Record<string, string>): Promise<Response> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fetch(url, { headers });
+    } catch (err) {
+      if (attempt >= NETWORK_RETRY_ATTEMPTS) throw err;
+      await sleep(1000 * attempt);
+    }
+  }
+}
+
 async function fetchSearchByQuery(query: string, page: number): Promise<GithubSearchResponse> {
   const url = `https://api.github.com/search/users?q=${encodeURIComponent(query)}&per_page=${PER_PAGE}&page=${page}`;
   const headers: Record<string, string> = { Accept: "application/vnd.github+json" };
   if (GITHUB_TOKEN) headers.Authorization = `token ${GITHUB_TOKEN}`;
 
-  const res = await fetch(url, { headers });
+  const res = await fetchWithRetry(url, headers);
   if (!res.ok) {
     if (
       (res.status === 403 || res.status === 429) &&

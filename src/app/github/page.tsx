@@ -1,6 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import VeeProfilePanel from "@/components/VeeProfilePanel";
+
+const MAX_AUTO_RESUME_ATTEMPTS = 5;
+const GENERIC_RETRY_BASE_MS = 30000;
+const GENERIC_RETRY_MAX_MS = 120000;
 
 type GithubUser = {
   login: string;
@@ -145,6 +150,16 @@ export default function GithubSearchPage() {
   const [scoring, setScoring] = useState(false);
   const [scoreError, setScoreError] = useState<string | null>(null);
   const [scoreStatus, setScoreStatus] = useState<string | null>(null);
+  const [selectedLinkedinUrl, setSelectedLinkedinUrl] = useState<string | null>(null);
+
+  const autoResumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoResumeAttemptsRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      if (autoResumeTimerRef.current) clearTimeout(autoResumeTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     loadHistory()
@@ -206,6 +221,11 @@ export default function GithubSearchPage() {
   }
 
   function startStream(params: URLSearchParams) {
+    if (autoResumeTimerRef.current) {
+      clearTimeout(autoResumeTimerRef.current);
+      autoResumeTimerRef.current = null;
+    }
+
     setLoading(true);
     setProgress(null);
     setError(null);
@@ -219,6 +239,7 @@ export default function GithubSearchPage() {
     });
 
     es.addEventListener("done", (event) => {
+      autoResumeAttemptsRef.current = 0;
       setResult(JSON.parse(event.data));
       setLoading(false);
       setProgress(null);
@@ -228,15 +249,50 @@ export default function GithubSearchPage() {
 
     es.addEventListener("error", (event) => {
       const messageEvent = event as MessageEvent;
-      if (messageEvent.data) {
-        setError(JSON.parse(messageEvent.data).message);
-      } else {
-        setError("Connection to the server was lost");
-      }
+      const parsed: {
+        searchId?: number;
+        message?: string;
+        rateLimited?: boolean;
+        resetAt?: string;
+      } | null = messageEvent.data ? JSON.parse(messageEvent.data) : null;
+      const baseMessage = parsed?.message ?? "Connection to the server was lost";
+
       setLoading(false);
       setProgress(null);
       es.close();
       refreshHistory();
+
+      if (parsed?.searchId == null) {
+        setError(baseMessage);
+        return;
+      }
+
+      if (autoResumeAttemptsRef.current >= MAX_AUTO_RESUME_ATTEMPTS) {
+        setError(
+          `${baseMessage} Gave up auto-resuming after ${MAX_AUTO_RESUME_ATTEMPTS} attempts — click Resume below to try again.`
+        );
+        autoResumeAttemptsRef.current = 0;
+        return;
+      }
+
+      const attempt = autoResumeAttemptsRef.current + 1;
+      autoResumeAttemptsRef.current = attempt;
+
+      const delayMs =
+        parsed.rateLimited && parsed.resetAt
+          ? Math.max(0, new Date(parsed.resetAt).getTime() - Date.now()) + 5000
+          : Math.min(GENERIC_RETRY_BASE_MS * attempt, GENERIC_RETRY_MAX_MS);
+      const resumeAt = new Date(Date.now() + delayMs);
+      const searchId = parsed.searchId;
+
+      setError(
+        `${baseMessage} Auto-resuming at ${resumeAt.toLocaleTimeString()} (attempt ${attempt} of ${MAX_AUTO_RESUME_ATTEMPTS})...`
+      );
+
+      autoResumeTimerRef.current = setTimeout(() => {
+        autoResumeTimerRef.current = null;
+        handleResume(searchId);
+      }, delayMs);
     });
   }
 
@@ -257,7 +313,8 @@ export default function GithubSearchPage() {
   }
 
   return (
-    <div className="flex flex-col min-h-screen items-center bg-zinc-50 font-sans dark:bg-black">
+    <div className="flex min-h-screen bg-zinc-50 font-sans dark:bg-black">
+      <div className="flex flex-1 justify-center">
       <main className="flex w-full max-w-3xl flex-col gap-8 py-16 px-6">
         <div>
           <h1 className="text-2xl font-semibold text-black dark:text-zinc-50">
@@ -445,7 +502,17 @@ export default function GithubSearchPage() {
                             onClick={(e) => e.stopPropagation()}
                           >
                             LinkedIn{user.linkedinVerified && " ✓"}
-                          </a>
+                          </a>{" "}
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setSelectedLinkedinUrl(user.linkedinUrl);
+                            }}
+                            className="rounded-full border border-black/15 px-2 py-0.5 text-[10px] font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
+                          >
+                            View
+                          </button>
                         </>
                       )}
                       {user.lastPushedAt &&
@@ -628,7 +695,13 @@ export default function GithubSearchPage() {
                               className="text-blue-600 underline dark:text-blue-400"
                             >
                               LinkedIn{u.linkedin_verified && " ✓"}
-                            </a>
+                            </a>{" "}
+                            <button
+                              onClick={() => setSelectedLinkedinUrl(u.linkedin_url)}
+                              className="rounded-full border border-black/15 px-2 py-0.5 text-[10px] font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
+                            >
+                              View
+                            </button>
                           </>
                         )}
                       </span>
@@ -684,6 +757,15 @@ export default function GithubSearchPage() {
           )}
         </div>
       </main>
+      </div>
+      {selectedLinkedinUrl && (
+        <aside className="sticky top-0 h-screen w-1/2 shrink-0 overflow-y-auto border-l border-black/10 bg-white dark:border-white/10 dark:bg-zinc-950">
+          <VeeProfilePanel
+            profileUrl={selectedLinkedinUrl}
+            onClose={() => setSelectedLinkedinUrl(null)}
+          />
+        </aside>
+      )}
     </div>
   );
 }

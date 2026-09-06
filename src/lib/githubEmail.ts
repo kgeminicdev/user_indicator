@@ -32,11 +32,27 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const NETWORK_RETRY_ATTEMPTS = 3;
+
+// Retries only on network-level failures (DNS blips, connection resets —
+// fetch() throwing before any response comes back), not on HTTP error
+// responses, which are handled separately (rate limits, 4xx/5xx).
+async function fetchWithRetry(url: string, headers: Record<string, string>): Promise<Response> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fetch(url, { headers });
+    } catch (err) {
+      if (attempt >= NETWORK_RETRY_ATTEMPTS) throw err;
+      await sleep(1000 * attempt);
+    }
+  }
+}
+
 export async function fetchJson(url: string) {
   const headers: Record<string, string> = GITHUB_TOKEN
     ? { Authorization: `token ${GITHUB_TOKEN}` }
     : {};
-  const response = await fetch(url, { headers });
+  const response = await fetchWithRetry(url, headers);
   if (!response.ok) {
     throwIfRateLimited(response);
     throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
