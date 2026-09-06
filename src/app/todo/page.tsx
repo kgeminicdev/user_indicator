@@ -17,11 +17,8 @@ type TodoItem = {
   external_profiles: ExternalProfile[] | null;
   derived_email: string | null;
   status: string;
-  hidden: boolean;
   created_at: string;
 };
-
-type View = "active" | "hidden";
 
 type ScanResult = {
   scanned: number;
@@ -39,8 +36,8 @@ type TodoPageResult = {
   totalPages: number;
 };
 
-function loadTodos(page: number, view: View): Promise<TodoPageResult> {
-  return fetch(`/api/todo?page=${page}&view=${view}`).then((res) => {
+function loadTodos(page: number): Promise<TodoPageResult> {
+  return fetch(`/api/todo?page=${page}`).then((res) => {
     if (!res.ok) throw new Error(`request failed (${res.status})`);
     return res.json();
   });
@@ -66,7 +63,6 @@ export default function TodoPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
-  const [view, setView] = useState<View>("active");
 
   const [startId, setStartId] = useState("");
   const [endId, setEndId] = useState("");
@@ -80,14 +76,12 @@ export default function TodoPage() {
   const [applyStatus, setApplyStatus] = useState<Record<string, "saving" | "done" | "error">>({});
   const [applyErrors, setApplyErrors] = useState<Record<string, string>>({});
 
-  // Braintrust candidates often have no derived email — when that's the
-  // case, both View and Copy and Applied first require one to be typed in,
-  // rather than proceeding with a null email.
-  const [emailPrompt, setEmailPrompt] = useState<{
-    id: number;
-    linkedinUrl: string;
-    action: "view" | "apply";
-  } | null>(null);
+  // Braintrust candidates often have no derived email — Copy and Applied
+  // requires one to be typed in first rather than proceeding with a null
+  // email; View works fine without one.
+  const [emailPrompt, setEmailPrompt] = useState<{ id: number; linkedinUrl: string } | null>(
+    null
+  );
   const [emailPromptValue, setEmailPromptValue] = useState("");
 
   function applyTodoPage(data: TodoPageResult) {
@@ -97,33 +91,28 @@ export default function TodoPage() {
     setTotal(data.total);
   }
 
-  function refresh(targetPage: number, targetView: View = view) {
+  function refresh(targetPage: number) {
     setLoading(true);
-    return loadTodos(targetPage, targetView)
+    return loadTodos(targetPage)
       .then(applyTodoPage)
       .catch((err) => setError((err as Error).message))
       .finally(() => setLoading(false));
   }
 
   useEffect(() => {
-    loadTodos(1, "active")
+    loadTodos(1)
       .then(applyTodoPage)
       .catch((err) => setError((err as Error).message))
       .finally(() => setLoading(false));
   }, []);
 
-  function handleViewChange(nextView: View) {
-    setView(nextView);
-    refresh(1, nextView);
-  }
-
-  async function act(id: number, action: "hide" | "delete") {
+  async function deleteTodo(id: number) {
     setBusyId(id);
     try {
       const res = await fetch(`/api/todo/${id}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action: "delete" }),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -143,7 +132,7 @@ export default function TodoPage() {
       `Permanently delete ${item.name || "this candidate"}? This cannot be undone.`
     );
     if (!ok) return;
-    act(item.id, "delete");
+    deleteTodo(item.id);
   }
 
   async function handleCopyAndApplied(
@@ -216,11 +205,6 @@ export default function TodoPage() {
   }
 
   function handleViewClick(item: TodoItem, linkedinUrl: string) {
-    if (!item.derived_email) {
-      setEmailPrompt({ id: item.id, linkedinUrl, action: "view" });
-      setEmailPromptValue("");
-      return;
-    }
     setSelectedLinkedinUrl(linkedinUrl);
     setSelectedEmail(item.derived_email);
     setSelectedId(item.id);
@@ -228,25 +212,19 @@ export default function TodoPage() {
 
   function handleApplyClick(item: TodoItem, linkedinUrl: string) {
     if (!item.derived_email) {
-      setEmailPrompt({ id: item.id, linkedinUrl, action: "apply" });
+      setEmailPrompt({ id: item.id, linkedinUrl });
       setEmailPromptValue("");
       return;
     }
-    handleCopyAndApplied(linkedinUrl, item.derived_email, () => act(item.id, "hide"));
+    handleCopyAndApplied(linkedinUrl, item.derived_email, () => deleteTodo(item.id));
   }
 
   function submitEmailPrompt() {
     const email = emailPromptValue.trim();
     if (!emailPrompt || !isValidEmail(email)) return;
-    const { id, linkedinUrl, action } = emailPrompt;
+    const { id, linkedinUrl } = emailPrompt;
     setEmailPrompt(null);
-    if (action === "view") {
-      setSelectedLinkedinUrl(linkedinUrl);
-      setSelectedEmail(email);
-      setSelectedId(id);
-    } else {
-      handleCopyAndApplied(linkedinUrl, email, () => act(id, "hide"));
-    }
+    handleCopyAndApplied(linkedinUrl, email, () => deleteTodo(id));
   }
 
   async function handleScan(e: React.FormEvent) {
@@ -288,29 +266,9 @@ export default function TodoPage() {
             <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
               Braintrust users not yet found in your records. View their
               LinkedIn profile and use Copy and Applied to log outreach and
-              save them to your records. Hide tucks a user away (reversible,
-              viewable below); Delete removes them permanently.
+              save them to your records. Delete removes a candidate
+              permanently.
             </p>
-            <div className="mt-2 flex items-center gap-4 text-sm">
-              <label className="flex items-center gap-1.5">
-                <input
-                  type="radio"
-                  name="view"
-                  checked={view === "active"}
-                  onChange={() => handleViewChange("active")}
-                />
-                Active
-              </label>
-              <label className="flex items-center gap-1.5">
-                <input
-                  type="radio"
-                  name="view"
-                  checked={view === "hidden"}
-                  onChange={() => handleViewChange("hidden")}
-                />
-                Removed
-              </label>
-            </div>
           </div>
 
           <form
@@ -417,9 +375,7 @@ export default function TodoPage() {
           )}
 
           {!loading && total === 0 && !error && (
-            <p className="text-sm text-zinc-500">
-              {view === "active" ? "Nothing pending." : "No removed users."}
-            </p>
+            <p className="text-sm text-zinc-500">Nothing pending.</p>
           )}
 
           <div className="flex flex-col gap-3">
@@ -546,13 +502,6 @@ export default function TodoPage() {
                         </>
                       )}
                       <button
-                        onClick={() => act(item.id, "hide")}
-                        disabled={busyId === item.id}
-                        className="rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium dark:border-white/15 disabled:opacity-40"
-                      >
-                        Hide
-                      </button>
-                      <button
                         onClick={() => handleDelete(item)}
                         disabled={busyId === item.id}
                         className="rounded-full border border-red-300 px-3 py-1.5 text-xs font-medium text-red-600 dark:border-red-900 dark:text-red-400 disabled:opacity-40"
@@ -569,8 +518,7 @@ export default function TodoPage() {
           {total > 0 && (
             <div className="flex items-center justify-between text-sm">
               <span className="text-zinc-500">
-                Page {page} of {totalPages} ({total}{" "}
-                {view === "active" ? "pending" : "removed"})
+                Page {page} of {totalPages} ({total} pending)
               </span>
               <div className="flex gap-2">
                 <button
@@ -604,7 +552,7 @@ export default function TodoPage() {
               setSelectedId(null);
             }}
             onAlreadyExists={() => {
-              if (selectedId != null) act(selectedId, "hide");
+              if (selectedId != null) deleteTodo(selectedId);
               setSelectedLinkedinUrl(null);
               setSelectedEmail(null);
               setSelectedId(null);

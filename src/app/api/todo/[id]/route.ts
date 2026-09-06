@@ -11,9 +11,9 @@ export async function POST(
   const overrideEmail =
     typeof body.email === "string" ? body.email.trim() : undefined;
 
-  if (action !== "approve" && action !== "hide" && action !== "delete") {
+  if (action !== "approve" && action !== "delete") {
     return NextResponse.json(
-      { error: "action must be 'approve', 'hide', or 'delete'" },
+      { error: "action must be 'approve' or 'delete'" },
       { status: 400 }
     );
   }
@@ -60,8 +60,6 @@ export async function POST(
         [name, email, link, "Source: Braintrust"]
       );
       await client.query(`DELETE FROM todo WHERE id = $1`, [id]);
-    } else if (action === "hide") {
-      await client.query(`UPDATE todo SET hidden = true WHERE id = $1`, [id]);
     } else {
       await client.query(`DELETE FROM todo WHERE id = $1`, [id]);
     }
