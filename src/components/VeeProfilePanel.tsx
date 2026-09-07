@@ -56,6 +56,7 @@ export default function VeeProfilePanel({
   onClose,
   onLoaded,
   onAlreadyExists,
+  onApplied,
 }: {
   profileUrl: string;
   email?: string | null;
@@ -63,6 +64,11 @@ export default function VeeProfilePanel({
   onClose?: () => void;
   onLoaded?: () => void;
   onAlreadyExists?: () => void;
+  // Fired after a genuinely new Copy and Applied succeeds (distinct from
+  // onAlreadyExists) — only wired up where the source list has no other way
+  // to reflect "already applied" (e.g. To Do, which has no applied/hide
+  // flag like github_us does).
+  onApplied?: () => void;
 }) {
   const [data, setData] = useState<VeeProfileData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -156,6 +162,7 @@ export default function VeeProfilePanel({
       }
       setApplyStatus("done");
       notify(`Copied & saved: ${data.common.full_name || emailToUse || profileUrl}`, "success");
+      onApplied?.();
       onClose?.();
     } catch (err) {
       notify(`Error saving: ${(err as Error).message}`, "error");

@@ -202,6 +202,7 @@ export default function TodoPage() {
       }
       setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "done" }));
       notify(`Copied & saved: ${profile.common.full_name || email || linkedinUrl}`, "success");
+      removeFromView();
     } catch (err) {
       notify(`Error saving: ${(err as Error).message}`, "error");
       setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "error" }));
@@ -561,6 +562,9 @@ export default function TodoPage() {
               setSelectedLinkedinUrl(null);
               setSelectedEmail(null);
               setSelectedId(null);
+            }}
+            onApplied={() => {
+              if (selectedId != null) deleteTodo(selectedId);
             }}
           />
         </aside>
