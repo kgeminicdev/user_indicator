@@ -1,16 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { pool } from "@/lib/db";
 
-function dateFilter(column: string, from: string | null, to: string | null) {
-  const conditions: string[] = [`${column} IS NOT NULL`];
+// Counts rows where `statusColumn` is set, scoped to the same date range
+// (by created_at, i.e. when they were applied to) that "applied in range"
+// and the table itself use — not by when they were read/interviewed, so all
+// three stats answer the same question: "of who was applied to in this
+// range, how many are read/interviewed."
+function dateFilter(statusColumn: string, from: string | null, to: string | null) {
+  const conditions: string[] = [`${statusColumn} IS NOT NULL`];
   const params: unknown[] = [];
   if (from) {
     params.push(from);
-    conditions.push(`${column} >= $${params.length}::date`);
+    conditions.push(`created_at >= $${params.length}::date`);
   }
   if (to) {
     params.push(to);
-    conditions.push(`${column} < ($${params.length}::date + interval '1 day')`);
+    conditions.push(`created_at < ($${params.length}::date + interval '1 day')`);
   }
   return { where: conditions.join(" AND "), params };
 }

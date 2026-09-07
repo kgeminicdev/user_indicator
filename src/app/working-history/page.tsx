@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
+import { notify } from "@/components/Toast";
 
 type WorkingHistoryItem = {
   id: number;
@@ -26,10 +27,20 @@ type RecordStats = {
   interviewed: number;
 };
 
-function loadWorkingHistory(page: number, from: string, to: string): Promise<WorkingHistoryPage> {
+type TriState = "any" | "yes" | "no";
+
+function loadWorkingHistory(
+  page: number,
+  from: string,
+  to: string,
+  readFilter: TriState,
+  interviewedFilter: TriState
+): Promise<WorkingHistoryPage> {
   const params = new URLSearchParams({ page: String(page) });
   if (from) params.set("from", from);
   if (to) params.set("to", to);
+  if (readFilter !== "any") params.set("read", readFilter);
+  if (interviewedFilter !== "any") params.set("interviewed", interviewedFilter);
   return fetch(`/api/working-history?${params}`).then((res) => {
     if (!res.ok) throw new Error(`request failed (${res.status})`);
     return res.json();
@@ -55,10 +66,13 @@ function loadRecordStats(from: string, to: string): Promise<RecordStats> {
 export default function WorkingHistoryPage() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [readFilter, setReadFilter] = useState<TriState>("any");
+  const [interviewedFilter, setInterviewedFilter] = useState<TriState>("any");
   const [data, setData] = useState<WorkingHistoryPage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [undoingId, setUndoingId] = useState<number | null>(null);
 
   const [recordStats, setRecordStats] = useState<RecordStats | null>(null);
 
@@ -69,7 +83,7 @@ export default function WorkingHistoryPage() {
   function refresh(page: number) {
     setLoading(true);
     setError(null);
-    loadWorkingHistory(page, from, to)
+    loadWorkingHistory(page, from, to, readFilter, interviewedFilter)
       .then(setData)
       .catch((err) => setError((err as Error).message))
       .finally(() => setLoading(false));
@@ -85,7 +99,28 @@ export default function WorkingHistoryPage() {
     refresh(1);
     refreshStats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to]);
+  }, [from, to, readFilter, interviewedFilter]);
+
+  async function handleUndo(item: WorkingHistoryItem) {
+    const ok = window.confirm(
+      `Undo Copy and Applied for ${item.email || item.linkedin_url}? This removes them from records and this log; if they came from GitHub, they'll reappear in that tab's list.`
+    );
+    if (!ok) return;
+
+    setUndoingId(item.id);
+    try {
+      const res = await fetch(`/api/working-history/${item.id}/undo`, { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `request failed (${res.status})`);
+      notify(`Undone: ${item.email || item.linkedin_url}`, "success");
+      refresh(data?.page ?? 1);
+      refreshStats();
+    } catch (err) {
+      notify(`Error undoing: ${(err as Error).message}`, "error");
+    } finally {
+      setUndoingId(null);
+    }
+  }
 
   async function handleMark(status: "read" | "interviewed") {
     const email = markEmail.trim();
@@ -103,6 +138,7 @@ export default function WorkingHistoryPage() {
       setMarkStatus("done");
       setMarkMessage(`Marked ${email} as ${status}.`);
       setMarkEmail("");
+      refresh(data?.page ?? 1);
       refreshStats();
     } catch (err) {
       setMarkStatus("error");
@@ -133,6 +169,30 @@ export default function WorkingHistoryPage() {
             />
           </label>
           <label className="flex flex-col gap-1 text-sm">
+            Read
+            <select
+              value={readFilter}
+              onChange={(e) => setReadFilter(e.target.value as TriState)}
+              className="rounded border border-black/15 px-3 py-2 text-sm dark:border-white/15 dark:bg-zinc-900"
+            >
+              <option value="any">Any</option>
+              <option value="yes">Read</option>
+              <option value="no">Not read</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Interviewed
+            <select
+              value={interviewedFilter}
+              onChange={(e) => setInterviewedFilter(e.target.value as TriState)}
+              className="rounded border border-black/15 px-3 py-2 text-sm dark:border-white/15 dark:bg-zinc-900"
+            >
+              <option value="any">Any</option>
+              <option value="yes">Interviewed</option>
+              <option value="no">Not interviewed</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
             To
             <input
               type="date"
@@ -155,11 +215,13 @@ export default function WorkingHistoryPage() {
           >
             Today
           </button>
-          {(from || to) && (
+          {(from || to || readFilter !== "any" || interviewedFilter !== "any") && (
             <button
               onClick={() => {
                 setFrom("");
                 setTo("");
+                setReadFilter("any");
+                setInterviewedFilter("any");
               }}
               className="rounded-full border border-black/15 px-4 py-2 text-xs font-medium dark:border-white/15"
             >
@@ -245,6 +307,7 @@ export default function WorkingHistoryPage() {
                     <th className="whitespace-nowrap px-3 py-2 font-medium">Read</th>
                     <th className="whitespace-nowrap px-3 py-2 font-medium">Interviewed</th>
                     <th className="whitespace-nowrap px-3 py-2 font-medium">Content</th>
+                    <th className="whitespace-nowrap px-3 py-2 font-medium">Undo</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -306,10 +369,19 @@ export default function WorkingHistoryPage() {
                             <span className="text-xs text-zinc-400">—</span>
                           )}
                         </td>
+                        <td className="px-3 py-2">
+                          <button
+                            onClick={() => handleUndo(item)}
+                            disabled={undoingId === item.id}
+                            className="rounded-full border border-red-300 px-3 py-1 text-xs font-medium text-red-600 disabled:opacity-40 dark:border-red-900 dark:text-red-400"
+                          >
+                            {undoingId === item.id ? "Undoing..." : "Undo"}
+                          </button>
+                        </td>
                       </tr>
                       {expandedId === item.id && item.content && (
                         <tr className="border-b border-black/5 dark:border-white/5">
-                          <td colSpan={7} className="px-3 py-2">
+                          <td colSpan={8} className="px-3 py-2">
                             <p className="whitespace-pre-line rounded-lg border border-black/10 p-3 text-xs text-zinc-600 dark:border-white/10 dark:text-zinc-400">
                               {item.content}
                             </p>

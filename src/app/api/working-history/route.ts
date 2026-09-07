@@ -9,6 +9,8 @@ export async function GET(request: NextRequest) {
   const offset = (page - 1) * PAGE_SIZE;
   const from = request.nextUrl.searchParams.get("from");
   const to = request.nextUrl.searchParams.get("to");
+  const readFilter = request.nextUrl.searchParams.get("read");
+  const interviewedFilter = request.nextUrl.searchParams.get("interviewed");
 
   const conditions: string[] = [];
   const params: unknown[] = [];
@@ -19,6 +21,16 @@ export async function GET(request: NextRequest) {
   if (to) {
     params.push(to);
     conditions.push(`created_at < ($${params.length}::date + interval '1 day')`);
+  }
+  if (readFilter === "yes") {
+    conditions.push(`read_at IS NOT NULL`);
+  } else if (readFilter === "no") {
+    conditions.push(`read_at IS NULL`);
+  }
+  if (interviewedFilter === "yes") {
+    conditions.push(`interviewed_at IS NOT NULL`);
+  } else if (interviewedFilter === "no") {
+    conditions.push(`interviewed_at IS NULL`);
   }
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 

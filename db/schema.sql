@@ -95,3 +95,17 @@ CREATE TABLE IF NOT EXISTS working_history (
 ALTER TABLE working_history ADD COLUMN IF NOT EXISTS source TEXT;
 ALTER TABLE working_history ADD COLUMN IF NOT EXISTS read_at TIMESTAMP;
 ALTER TABLE working_history ADD COLUMN IF NOT EXISTS interviewed_at TIMESTAMP;
+
+-- Tracks which Vee lookup proxy IPs are known to have exhausted their daily
+-- free-tier credits, so fetchVeeProfile can skip them without a live 403
+-- round-trip, and the skip-list survives server restarts.
+CREATE TABLE IF NOT EXISTS vee_proxy_ips (
+  ip                   TEXT PRIMARY KEY,
+  exhausted_until      TIMESTAMP,
+  credits_used_today   INTEGER NOT NULL DEFAULT 0,
+  credits_used_date    DATE,
+  updated_at           TIMESTAMP NOT NULL DEFAULT now()
+);
+
+ALTER TABLE vee_proxy_ips ADD COLUMN IF NOT EXISTS credits_used_today INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE vee_proxy_ips ADD COLUMN IF NOT EXISTS credits_used_date DATE;

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import VeeProfilePanel from "@/components/VeeProfilePanel";
+import { notify } from "@/components/Toast";
 import type { VeeProfileData } from "@/lib/veeProfileData";
 import { buildVeeApplyContent } from "@/lib/veeProfileFormat";
 
@@ -343,10 +344,12 @@ export default function GithubSearchPage() {
       const checkBody = await checkRes.json();
       if (!checkRes.ok) throw new Error(checkBody.error || `request failed (${checkRes.status})`);
       if (checkBody.exists) {
+        notify(`Already in records (${email || linkedinUrl}) — removed from view, nothing saved.`);
         removeFromView();
         return;
       }
     } catch (err) {
+      notify(`Error checking records: ${(err as Error).message}`, "error");
       setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "error" }));
       setApplyErrors((prev) => ({ ...prev, [linkedinUrl]: (err as Error).message }));
       return;
@@ -386,7 +389,9 @@ export default function GithubSearchPage() {
         throw new Error(saveBody.error || `request failed (${saveRes.status})`);
       }
       setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "done" }));
+      notify(`Copied & saved: ${profile.common.full_name || email || linkedinUrl}`, "success");
     } catch (err) {
+      notify(`Error saving: ${(err as Error).message}`, "error");
       setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "error" }));
       setApplyErrors((prev) => ({ ...prev, [linkedinUrl]: (err as Error).message }));
     }

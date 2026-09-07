@@ -2,6 +2,7 @@
 // (Veezee) lookup service — never forward the response anywhere but this
 // app's own UI.
 import { ProxyAgent, fetch as undiciFetch, type Dispatcher } from "undici";
+import { pool } from "@/lib/db";
 
 const VEE_API_URL = process.env.VEE_API_URL + "linkedin/profiles" || "http://localhost:5000/profiles";
 const VEE_USAGE_URL = process.env.VEE_API_URL + "usage" || "http://localhost:5001/usage";
@@ -109,35 +110,112 @@ export class VeeProfileError extends Error {
   }
 }
 
-let proxyIpIndex = 0;
-let proxyDispatcher: Dispatcher | undefined;
+const hasProxyConfig = VEE_PROXY_IP_LIST.length > 0 && !!VEE_PROXY_USERNAME && !!VEE_PROXY_PASSWORD;
 
-function getProxyDispatcher(): Dispatcher | undefined {
-  if (VEE_PROXY_IP_LIST.length === 0 || !VEE_PROXY_USERNAME || !VEE_PROXY_PASSWORD) {
-    return undefined;
+const proxyDispatchers = new Map<string, Dispatcher>();
+
+function getDispatcherForIp(ip: string): Dispatcher {
+  let dispatcher = proxyDispatchers.get(ip);
+  if (!dispatcher) {
+    dispatcher = new ProxyAgent(`http://${VEE_PROXY_USERNAME}:${VEE_PROXY_PASSWORD}@${ip}`);
+    proxyDispatchers.set(ip, dispatcher);
   }
+  return dispatcher;
+}
 
-  if (!proxyDispatcher) {
-    const ip = VEE_PROXY_IP_LIST[proxyIpIndex];
-    proxyDispatcher = new ProxyAgent(
-      `http://${VEE_PROXY_USERNAME}:${VEE_PROXY_PASSWORD}@${ip}`
+// The free tier resets daily — round to the next UTC midnight so a marked
+// IP naturally becomes eligible again without any separate cleanup job.
+function nextMidnightUtc(): Date {
+  const d = new Date();
+  d.setUTCHours(24, 0, 0, 0);
+  return d;
+}
+
+// Reads which of the configured IPs are currently known-exhausted (persisted
+// in vee_proxy_ips, so this survives server restarts). Failing to reach the
+// DB just means "treat nothing as known-exhausted" rather than blocking
+// lookups outright.
+async function loadExhaustedUntil(ips: string[]): Promise<Map<string, Date>> {
+  if (ips.length === 0) return new Map();
+  try {
+    const result = await pool.query<{ ip: string; exhausted_until: Date | null }>(
+      `SELECT ip, exhausted_until FROM vee_proxy_ips WHERE ip = ANY($1)`,
+      [ips]
     );
+    const map = new Map<string, Date>();
+    for (const row of result.rows) {
+      if (row.exhausted_until) map.set(row.ip, new Date(row.exhausted_until));
+    }
+    return map;
+  } catch {
+    return new Map();
   }
-
-  return proxyDispatcher;
 }
 
-// Round-robins to the next configured proxy IP and drops the cached
-// dispatcher so the next request picks up the new one — used when the
-// current IP has exhausted its per-IP daily free-tier credits.
-function rotateProxyIp() {
-  if (VEE_PROXY_IP_LIST.length === 0) return;
-  proxyIpIndex = (proxyIpIndex + 1) % VEE_PROXY_IP_LIST.length;
-  proxyDispatcher = undefined;
+async function markIpExhausted(ip: string): Promise<void> {
+  await pool
+    .query(
+      `INSERT INTO vee_proxy_ips (ip, exhausted_until, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (ip) DO UPDATE SET exhausted_until = EXCLUDED.exhausted_until, updated_at = now()`,
+      [ip, nextMidnightUtc()]
+    )
+    .catch(() => {});
 }
 
-function getCurrentProxyIp(): string | null {
-  return VEE_PROXY_IP_LIST[proxyIpIndex] ?? null;
+function todayUtcDateStr(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// The lookup service's daily free-tier cap, consistently observed as 200
+// across every configured IP via /usage. Each real profile lookup reports
+// exactly how many credits it charged (usage.credits_charged in the raw
+// response) — tracking that running total here lets an IP be marked
+// exhausted the instant it crosses the cap, instead of only discovering
+// that later via a wasted request that comes back 403.
+const CREDITS_PER_IP_PER_DAY = 200;
+
+async function recordCreditsUsed(ip: string, creditsCharged: number): Promise<void> {
+  if (!Number.isFinite(creditsCharged) || creditsCharged <= 0) return;
+  const today = todayUtcDateStr();
+  try {
+    const result = await pool.query<{ credits_used_today: number }>(
+      `INSERT INTO vee_proxy_ips (ip, credits_used_today, credits_used_date, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (ip) DO UPDATE SET
+         credits_used_today = CASE
+           WHEN vee_proxy_ips.credits_used_date = $3 THEN vee_proxy_ips.credits_used_today + $2
+           ELSE $2
+         END,
+         credits_used_date = $3,
+         updated_at = now()
+       RETURNING credits_used_today`,
+      [ip, creditsCharged, today]
+    );
+    const usedToday = result.rows[0]?.credits_used_today ?? 0;
+    if (usedToday >= CREDITS_PER_IP_PER_DAY) {
+      await markIpExhausted(ip);
+    }
+  } catch {
+    // Best-effort bookkeeping only — never let this fail a lookup that
+    // already succeeded.
+  }
+}
+
+// Ordered list of IPs worth actually trying right now — known-exhausted ones
+// (per the persisted skip-list) are filtered out so a request never pays for
+// a live 403 round-trip against an IP we already know is dead today. Falls
+// back to the full list if every IP is marked exhausted, since the
+// persisted state could be stale (e.g. credits topped up off-cycle).
+async function pickCandidateIps(): Promise<string[]> {
+  if (VEE_PROXY_IP_LIST.length === 0) return [];
+  const now = new Date();
+  const exhaustedUntil = await loadExhaustedUntil(VEE_PROXY_IP_LIST);
+  const live = VEE_PROXY_IP_LIST.filter((ip) => {
+    const until = exhaustedUntil.get(ip);
+    return !until || until <= now;
+  });
+  return live.length > 0 ? live : VEE_PROXY_IP_LIST;
 }
 
 // The lookup service expects just the profile slug (e.g.
@@ -159,21 +237,24 @@ function extractLinkedinIdentifier(input: string): string {
   }
 }
 
-async function veeFetch(input: string | URL, init: RequestInit = {}): Promise<Response> {
-  const dispatcher = getProxyDispatcher();
-  if (!dispatcher) return fetch(input, init);
+async function veeFetch(
+  input: string | URL,
+  init: RequestInit = {},
+  ip?: string
+): Promise<Response> {
+  if (!ip) return fetch(input, init);
 
   // Node's global fetch and the npm `undici` package are separate instances
   // — handing the global fetch a Dispatcher built by this package's
   // ProxyAgent throws "invalid onRequestStart method" (UND_ERR_INVALID_ARG).
   // undici's own fetch must be used whenever a dispatcher is involved.
-  return undiciFetch(
-    input as string,
-    { ...init, dispatcher } as Parameters<typeof undiciFetch>[1]
-  ) as unknown as Promise<Response>;
+  return undiciFetch(input as string, {
+    ...init,
+    dispatcher: getDispatcherForIp(ip),
+  } as Parameters<typeof undiciFetch>[1]) as unknown as Promise<Response>;
 }
 
-async function fetchVeeProfileOnce(identifier: string): Promise<Response> {
+async function fetchVeeProfileOnce(identifier: string, ip?: string): Promise<Response> {
   const url = new URL(VEE_API_URL);
   url.searchParams.set("identifier", identifier);
   url.searchParams.set("sections", VEE_SECTIONS);
@@ -181,40 +262,50 @@ async function fetchVeeProfileOnce(identifier: string): Promise<Response> {
   const headers: Record<string, string> = {};
   if (VEE_API_TOKEN) headers.Authorization = `Bearer ${VEE_API_TOKEN}`;
 
-  return veeFetch(url.toString(), { headers });
+  return veeFetch(url.toString(), { headers }, ip);
 }
 
 export async function fetchVeeProfile(profileUrl: string): Promise<VeeProfileData> {
   const identifier = extractLinkedinIdentifier(profileUrl);
 
-  // A 403 usually means the current proxy IP's daily free-tier credits are
-  // exhausted. Rather than retry once and give up, cycle through every
-  // configured IP — several can be exhausted back-to-back (they're consumed
-  // in list order), so a single retry isn't always enough. Stops as soon as
-  // one IP returns anything other than 403 (success or a different error
-  // worth surfacing directly), rather than waiting for a separate /usage
-  // check to notice and rotate (which never happens from callers that only
-  // ever hit this function).
-  const maxAttempts = Math.max(1, VEE_PROXY_IP_LIST.length);
+  // A 403 means the proxy IP's daily free-tier credits are exhausted.
+  // Candidates already known-exhausted (persisted in vee_proxy_ips) are
+  // skipped up front instead of re-discovering that via a live 403 round
+  // trip on every request — a fresh 403 here still marks the IP exhausted
+  // so every later request (and every later server restart) skips it too.
+  const candidates: (string | undefined)[] = hasProxyConfig ? await pickCandidateIps() : [undefined];
+
   let response: Response | undefined;
   let lastError: VeeProfileError | undefined;
+  let successIp: string | undefined;
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  for (const ip of candidates) {
     try {
-      response = await fetchVeeProfileOnce(identifier);
+      response = await fetchVeeProfileOnce(identifier, ip);
     } catch (err) {
       lastError = new VeeProfileError(
-        `Failed to reach Vee lookup service at ${VEE_API_URL}: ${(err as Error).message}`
+        `Failed to reach Vee lookup service${ip ? ` via proxy ${ip}` : ""}: ${(err as Error).message}`
       );
       response = undefined;
+      continue;
     }
 
-    if (response && response.status !== 403) break;
-    if (attempt < maxAttempts) rotateProxyIp();
+    if (response.status === 403) {
+      if (ip) await markIpExhausted(ip);
+      response = undefined;
+      continue;
+    }
+    successIp = ip;
+    break;
   }
 
   if (!response) {
-    throw lastError ?? new VeeProfileError(`Failed to reach Vee lookup service at ${VEE_API_URL}`);
+    throw (
+      lastError ??
+      new VeeProfileError(
+        `All configured proxy IPs are exhausted for today — try again after the daily reset.`
+      )
+    );
   }
 
   if (!response.ok) {
@@ -223,22 +314,47 @@ export async function fetchVeeProfile(profileUrl: string): Promise<VeeProfileDat
     );
   }
 
+  let rawBody: VeeProfileData & { usage?: { credits_charged?: number } };
   try {
-    return await response.json();
+    rawBody = await response.json();
   } catch (err) {
     throw new VeeProfileError(
       `Vee lookup service returned invalid JSON: ${(err as Error).message}`
     );
   }
+
+  // The raw response also reports how many credits this call charged
+  // (usage.credits_charged) — track it per IP so exhaustion is predicted
+  // proactively instead of only discovered via a later wasted request.
+  if (successIp && typeof rawBody.usage?.credits_charged === "number") {
+    await recordCreditsUsed(successIp, rawBody.usage.credits_charged);
+  }
+
+  // Never forward usage/freshness/billing metadata to the client — it
+  // carries an upgrade link with an embedded account token, the same class
+  // of sensitive data /usage's whitelist already excludes. Only the actual
+  // profile content is returned.
+  return {
+    canonical_url: rawBody.canonical_url,
+    data_as_of: rawBody.data_as_of,
+    common: rawBody.common,
+    platform_fields: rawBody.platform_fields,
+  };
 }
 
 export async function fetchVeeUsage(): Promise<VeeUsage> {
   const headers: Record<string, string> = {};
   if (VEE_API_TOKEN) headers.Authorization = `Bearer ${VEE_API_TOKEN}`;
 
+  // Report usage for whichever IP a profile lookup would actually try next
+  // (the first non-known-exhausted candidate), so this reflects reality
+  // instead of a stale single "current" pointer.
+  const candidates = hasProxyConfig ? await pickCandidateIps() : [];
+  const ip = candidates[0];
+
   let response: Response;
   try {
-    response = await veeFetch(VEE_USAGE_URL, { headers });
+    response = await veeFetch(VEE_USAGE_URL, { headers }, ip);
   } catch (err) {
     throw new VeeProfileError(
       `Failed to reach Vee usage endpoint at ${VEE_USAGE_URL}: ${(err as Error).message}`
@@ -265,10 +381,11 @@ export async function fetchVeeUsage(): Promise<VeeUsage> {
   const remainingToday =
     freeTier && typeof freeTier.remaining_today === "number" ? freeTier.remaining_today : null;
 
-  // This IP's daily free-tier credits are exhausted — rotate to the next
-  // configured IP so the next call gets a fresh per-IP quota.
-  if (remainingToday !== null && remainingToday <= 0) {
-    rotateProxyIp();
+  // This IP's daily free-tier credits are exhausted — mark it so the next
+  // profile lookup (and the next usage check) skips it without needing to
+  // discover that itself via a live 403.
+  if (ip && remainingToday !== null && remainingToday <= 0) {
+    await markIpExhausted(ip);
   }
 
   return {
@@ -293,7 +410,7 @@ export async function fetchVeeUsage(): Promise<VeeUsage> {
       typeof common.realtime_ops_limit === "number" ? common.realtime_ops_limit : null,
     concurrentLimit:
       typeof common.concurrent_limit === "number" ? common.concurrent_limit : null,
-    currentProxyIp: getCurrentProxyIp(),
+    currentProxyIp: ip ?? null,
     proxyIpCount: VEE_PROXY_IP_LIST.length,
   };
 }

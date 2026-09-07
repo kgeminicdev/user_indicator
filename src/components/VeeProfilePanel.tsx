@@ -1,8 +1,53 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { notify } from "@/components/Toast";
 import type { VeeProfileData } from "@/lib/veeProfileData";
 import { formatDateRange, buildVeeApplyContent } from "@/lib/veeProfileFormat";
+
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+// Generic silhouette shown when a profile has no image_url — matches
+// LinkedIn's own default profile photo (flat gray circle, gray person icon)
+// so a missing photo doesn't look out of place. Inlined so no extra request
+// or asset file is needed.
+const DEFAULT_AVATAR =
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 140">` +
+      `<circle cx="70" cy="70" r="70" fill="#EBEBEB"/>` +
+      `<circle cx="70" cy="52" r="26" fill="#BDBDBD"/>` +
+      `<path d="M18 138c0-32.5 23.3-58.8 52-58.8s52 26.3 52 58.8" fill="#BDBDBD"/>` +
+      `</svg>`
+  );
+
+// LinkedIn's own verified-badge convention (blue circle, white checkmark),
+// in their brand blue — used in place of a plain "✓" character.
+function VerifiedBadge({ title = "Verified" }: { title?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={16}
+      height={16}
+      role="img"
+      aria-label={title}
+      className="shrink-0"
+    >
+      <title>{title}</title>
+      <circle cx="12" cy="12" r="11" fill="#0A66C2" />
+      <path
+        d="M7.5 12.5l2.7 2.7 6-6.8"
+        fill="none"
+        stroke="#fff"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 export default function VeeProfilePanel({
   profileUrl,
@@ -26,6 +71,8 @@ export default function VeeProfilePanel({
     "idle"
   );
   const [applyError, setApplyError] = useState<string | null>(null);
+  const [emailPrompt, setEmailPrompt] = useState(false);
+  const [emailPromptValue, setEmailPromptValue] = useState("");
 
   useEffect(() => {
     setLoading(true);
@@ -33,6 +80,8 @@ export default function VeeProfilePanel({
     setData(null);
     setApplyStatus("idle");
     setApplyError(null);
+    setEmailPrompt(false);
+    setEmailPromptValue("");
     fetch(`/api/vee-profile?url=${encodeURIComponent(profileUrl)}`)
       .then(async (res) => {
         const body = await res.json();
@@ -48,7 +97,7 @@ export default function VeeProfilePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profileUrl]);
 
-  async function handleCopyAndApplied() {
+  async function handleCopyAndApplied(emailToUse: string | null) {
     if (!data) return;
     setApplyStatus("saving");
     setApplyError(null);
@@ -60,16 +109,18 @@ export default function VeeProfilePanel({
       const checkRes = await fetch("/api/check-or-add", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email ?? "", link: profileUrl, onlySearch: true }),
+        body: JSON.stringify({ email: emailToUse ?? "", link: profileUrl, onlySearch: true }),
       });
       const checkBody = await checkRes.json();
       if (!checkRes.ok) throw new Error(checkBody.error || `request failed (${checkRes.status})`);
       if (checkBody.exists) {
         setApplyStatus("exists");
+        notify(`Already in records (${emailToUse || profileUrl}) — removed from view, nothing saved.`);
         onAlreadyExists?.();
         return;
       }
     } catch (err) {
+      notify(`Error checking records: ${(err as Error).message}`, "error");
       setApplyStatus("error");
       setApplyError((err as Error).message);
       return;
@@ -92,7 +143,7 @@ export default function VeeProfilePanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: email ?? null,
+          email: emailToUse ?? null,
           linkedinUrl: profileUrl,
           content,
           source: source ?? null,
@@ -104,10 +155,29 @@ export default function VeeProfilePanel({
         throw new Error(body.error || `request failed (${res.status})`);
       }
       setApplyStatus("done");
+      notify(`Copied & saved: ${data.common.full_name || emailToUse || profileUrl}`, "success");
+      onClose?.();
     } catch (err) {
+      notify(`Error saving: ${(err as Error).message}`, "error");
       setApplyStatus("error");
       setApplyError((err as Error).message);
     }
+  }
+
+  function handleApplyClick() {
+    if (email) {
+      handleCopyAndApplied(email);
+      return;
+    }
+    setEmailPrompt(true);
+    setEmailPromptValue("");
+  }
+
+  function submitEmailPrompt() {
+    const value = emailPromptValue.trim();
+    if (!isValidEmail(value)) return;
+    setEmailPrompt(false);
+    handleCopyAndApplied(value);
   }
 
   const common = data?.common;
@@ -142,24 +212,18 @@ export default function VeeProfilePanel({
       {data && common && (
         <>
           <section className="flex flex-row gap-4 rounded-lg border border-black/10 p-4 dark:border-white/10">
-            {common.image_url && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={common.image_url}
-                alt=""
-                width={140}
-                height={140}
-                className="h-[140px] w-[140px] shrink-0 rounded-full bg-black/10 object-cover dark:bg-white/10"
-              />
-            )}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={common.image_url || DEFAULT_AVATAR}
+              alt=""
+              width={140}
+              height={140}
+              className="h-[140px] w-[140px] shrink-0 rounded-full bg-black/10 object-cover dark:bg-white/10"
+            />
             <div className="flex flex-1 flex-col gap-1">
               <h3 className="flex items-center gap-1.5 text-lg font-semibold text-black dark:text-zinc-50">
                 {common.full_name}
-                {common.is_verified && (
-                  <span title="Verified" className="text-blue-500 dark:text-blue-400">
-                    ✓
-                  </span>
-                )}
+                {common.is_verified && <VerifiedBadge />}
                 {data.platform_fields.pronoun && (
                   <span className="text-sm font-normal text-zinc-500">
                     ({data.platform_fields.pronoun})
@@ -209,23 +273,55 @@ export default function VeeProfilePanel({
           </section>
 
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleCopyAndApplied}
-              disabled={applyStatus === "saving" || applyStatus === "exists"}
-              className="rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-40"
-            >
-              {applyStatus === "saving"
-                ? "Saving..."
-                : applyStatus === "done"
-                  ? "Copied & Saved ✓"
-                  : applyStatus === "exists"
-                    ? "Already in Records"
-                    : "Copy and Applied"}
-            </button>
-            {applyStatus === "error" && (
-              <span className="text-xs font-medium text-red-600 dark:text-red-400">
-                Error: {applyError}
-              </span>
+            {emailPrompt ? (
+              <>
+                <input
+                  type="email"
+                  autoFocus
+                  value={emailPromptValue}
+                  onChange={(e) => setEmailPromptValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submitEmailPrompt();
+                    if (e.key === "Escape") setEmailPrompt(false);
+                  }}
+                  placeholder="Email required"
+                  className="w-48 rounded border border-black/15 px-2 py-1.5 text-xs dark:border-white/15 dark:bg-zinc-900"
+                />
+                <button
+                  onClick={submitEmailPrompt}
+                  disabled={!isValidEmail(emailPromptValue.trim())}
+                  className="rounded-full bg-foreground px-4 py-1.5 text-xs font-medium text-background disabled:opacity-40"
+                >
+                  Continue
+                </button>
+                <button
+                  onClick={() => setEmailPrompt(false)}
+                  className="rounded-full border border-black/15 px-4 py-1.5 text-xs font-medium dark:border-white/15"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={handleApplyClick}
+                  disabled={applyStatus === "saving" || applyStatus === "exists"}
+                  className="rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-40"
+                >
+                  {applyStatus === "saving"
+                    ? "Saving..."
+                    : applyStatus === "done"
+                      ? "Copied & Saved ✓"
+                      : applyStatus === "exists"
+                        ? "Already in Records"
+                        : "Copy and Applied"}
+                </button>
+                {applyStatus === "error" && (
+                  <span className="text-xs font-medium text-red-600 dark:text-red-400">
+                    Error: {applyError}
+                  </span>
+                )}
+              </>
             )}
           </div>
 

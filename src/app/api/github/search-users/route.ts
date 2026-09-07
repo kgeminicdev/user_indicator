@@ -154,6 +154,7 @@ export async function GET(request: NextRequest) {
         let alreadyInDb: number;
         let alreadyInBraintrust: number;
         let checkedNew: number;
+        let withEmailTotal: number;
         let alreadyInRecordsCount: number;
         let incompleteWindows: number;
         let startWindow: number;
@@ -179,6 +180,7 @@ export async function GET(request: NextRequest) {
           alreadyInDb = row.already_in_db;
           alreadyInBraintrust = row.already_in_braintrust ?? 0;
           checkedNew = row.checked_new;
+          withEmailTotal = row.with_email ?? 0;
           alreadyInRecordsCount = row.already_in_records;
           incompleteWindows = row.incomplete_windows;
           startWindow = row.current_window;
@@ -204,6 +206,7 @@ export async function GET(request: NextRequest) {
           alreadyInDb = 0;
           alreadyInBraintrust = 0;
           checkedNew = 0;
+          withEmailTotal = 0;
           alreadyInRecordsCount = 0;
           incompleteWindows = 0;
           startWindow = 0;
@@ -387,6 +390,7 @@ export async function GET(request: NextRequest) {
                 checkedNew++;
                 if (r) {
                   found.push(r);
+                  withEmailTotal++;
                   if (r.alreadyInRecords) alreadyInRecordsCount++;
                   await pool.query(
                     `INSERT INTO github_us (name, github_link, email, avatar_url, location, already_in_records, linkedin_url, linkedin_verified)
@@ -420,7 +424,7 @@ export async function GET(request: NextRequest) {
                 page,
                 totalPagesInWindow,
                 checkedNew,
-                withEmail: found.length,
+                withEmail: withEmailTotal,
                 alreadyInDb,
                 alreadyInBraintrust,
               });
@@ -441,7 +445,7 @@ export async function GET(request: NextRequest) {
                 page,
                 alreadyInDb,
                 checkedNew,
-                found.length,
+                withEmailTotal,
                 alreadyInRecordsCount,
                 alreadyInBraintrust,
                 searchId,
@@ -465,7 +469,7 @@ export async function GET(request: NextRequest) {
           alreadyInDb,
           alreadyInBraintrust,
           checkedNew,
-          withEmail: found.length,
+          withEmail: withEmailTotal,
           alreadyInRecords: alreadyInRecordsCount,
           items: found.filter((r) => !r.alreadyInRecords),
         });
