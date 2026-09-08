@@ -21,8 +21,24 @@ type TodoEntriesPage = {
   totalPages: number;
 };
 
+type TodoStats = {
+  total: number;
+  github: number;
+  braintrust: number;
+  hackerrank: number;
+  contentReady: number;
+  contentMissing: number;
+};
+
 function loadEntries(page: number): Promise<TodoEntriesPage> {
   return fetch(`/api/todo-entries?page=${page}`).then((res) => {
+    if (!res.ok) throw new Error(`request failed (${res.status})`);
+    return res.json();
+  });
+}
+
+function loadStats(): Promise<TodoStats> {
+  return fetch("/api/todo-entries/stats").then((res) => {
     if (!res.ok) throw new Error(`request failed (${res.status})`);
     return res.json();
   });
@@ -35,6 +51,7 @@ export default function TodoPage() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [fetchingId, setFetchingId] = useState<number | null>(null);
+  const [stats, setStats] = useState<TodoStats | null>(null);
 
   function refresh(page: number) {
     setLoading(true);
@@ -45,8 +62,15 @@ export default function TodoPage() {
       .finally(() => setLoading(false));
   }
 
+  function refreshStats() {
+    loadStats()
+      .then(setStats)
+      .catch(() => {});
+  }
+
   useEffect(() => {
     refresh(1);
+    refreshStats();
   }, []);
 
   async function handleApplied(entry: TodoEntry) {
@@ -69,6 +93,7 @@ export default function TodoPage() {
       notify(`Applied: ${entry.name || entry.email || entry.link}`, "success");
       const nextPage = data && data.items.length === 1 && data.page > 1 ? data.page - 1 : data?.page ?? 1;
       await refresh(nextPage);
+      refreshStats();
     } catch (err) {
       notify(`Error applying: ${(err as Error).message}`, "error");
     } finally {
@@ -94,6 +119,7 @@ export default function TodoPage() {
         notify(`Nothing to fetch: ${entry.name || entry.email || entry.link}`);
       }
       await refresh(data?.page ?? 1);
+      refreshStats();
     } catch (err) {
       notify(`Error fetching content: ${(err as Error).message}`, "error");
     } finally {
@@ -114,6 +140,7 @@ export default function TodoPage() {
       notify(`Removed: ${entry.name || entry.email || entry.link}`);
       const nextPage = data && data.items.length === 1 && data.page > 1 ? data.page - 1 : data?.page ?? 1;
       await refresh(nextPage);
+      refreshStats();
     } catch (err) {
       notify(`Error removing: ${(err as Error).message}`, "error");
     } finally {
@@ -135,6 +162,17 @@ export default function TodoPage() {
             them to records and working history; Remove discards them.
           </p>
         </div>
+
+        {stats && (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6">
+            <StatBlock value={stats.total} label="total in queue" />
+            <StatBlock value={stats.github} label="from GitHub" />
+            <StatBlock value={stats.braintrust} label="from Braintrust" />
+            <StatBlock value={stats.hackerrank} label="from HackerRank" />
+            <StatBlock value={stats.contentReady} label="content ready" />
+            <StatBlock value={stats.contentMissing} label="content pending" />
+          </div>
+        )}
 
         {loading && <p className="text-sm text-zinc-500">Loading...</p>}
         {error && (
@@ -257,6 +295,17 @@ export default function TodoPage() {
           </>
         )}
       </main>
+    </div>
+  );
+}
+
+function StatBlock({ value, label }: { value: number; label: string }) {
+  return (
+    <div className="rounded-lg border border-black/10 p-4 dark:border-white/10">
+      <div className="text-3xl font-semibold text-black dark:text-zinc-50">
+        {value.toLocaleString()}
+      </div>
+      <div className="text-xs text-zinc-500">{label}</div>
     </div>
   );
 }
