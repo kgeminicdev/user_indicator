@@ -514,13 +514,20 @@ export default function HackerRankPage() {
                         </td>
                         <td className="px-3 py-2">
                           <div className="flex flex-nowrap items-center gap-2">
-                            {m.linkedin_url && (
+                            {m.linkedin_url ? (
                               <button
                                 onClick={() => handleViewClick(m.linkedin_url as string)}
                                 className="whitespace-nowrap rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
                               >
                                 View
                               </button>
+                            ) : (
+                              <span
+                                aria-hidden
+                                className="invisible whitespace-nowrap rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium"
+                              >
+                                View
+                              </span>
                             )}
                             <button
                               onClick={() => handleAddClick(m)}
