@@ -56,19 +56,19 @@ export default function VeeProfilePanel({
   onClose,
   onLoaded,
   onAlreadyExists,
-  onApplied,
+  onQueued,
 }: {
   profileUrl: string;
   email?: string | null;
-  source?: "github" | "braintrust" | null;
+  source?: "github" | "braintrust" | "hackerrank" | null;
   onClose?: () => void;
   onLoaded?: () => void;
   onAlreadyExists?: () => void;
-  // Fired after a genuinely new Copy and Applied succeeds (distinct from
+  // Fired after a genuinely new "Add to To Do" succeeds (distinct from
   // onAlreadyExists) — only wired up where the source list has no other way
-  // to reflect "already applied" (e.g. To Do, which has no applied/hide
+  // to reflect "already staged" (e.g. Braintrust, which has no applied/hide
   // flag like github_us does).
-  onApplied?: () => void;
+  onQueued?: () => void;
 }) {
   const [data, setData] = useState<VeeProfileData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -103,14 +103,14 @@ export default function VeeProfilePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profileUrl]);
 
-  async function handleCopyAndApplied(emailToUse: string | null) {
+  async function handleAddToTodo(emailToUse: string | null) {
     if (!data) return;
     setApplyStatus("saving");
     setApplyError(null);
 
-    // Check records first, before touching the clipboard or working
-    // history — if this candidate is already known, there's nothing else
-    // to do here except get them out of view.
+    // Check records first, before spending anything else — if this
+    // candidate is already known, there's nothing else to do here except
+    // get them out of view.
     try {
       const checkRes = await fetch("/api/check-or-add", {
         method: "POST",
@@ -134,35 +134,33 @@ export default function VeeProfilePanel({
 
     const content = buildVeeApplyContent(data);
     try {
-      await navigator.clipboard.writeText(content);
-    } catch {
-      // Clipboard access can fail (permissions, insecure context) — still
-      // log it to working history below even if the copy itself didn't work.
-    }
-    try {
       // Save the profileUrl this panel was opened with (matches
       // github_us.linkedin_url), not data.common.url — Vee returns its own
       // current canonical URL for the profile, which can use a different
       // vanity slug than what was originally stored, so matching on it
       // would silently fail.
-      const res = await fetch("/api/working-history", {
+      const res = await fetch("/api/todo-entries", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          name: data.common.full_name,
           email: emailToUse ?? null,
-          linkedinUrl: profileUrl,
+          link: profileUrl,
           content,
           source: source ?? null,
-          name: data.common.full_name,
         }),
       });
-      if (!res.ok) {
-        const body = await res.json();
-        throw new Error(body.error || `request failed (${res.status})`);
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `request failed (${res.status})`);
+      if (body.exists) {
+        setApplyStatus("exists");
+        notify(`Already in records (${emailToUse || profileUrl}) — removed from view, nothing saved.`);
+        onAlreadyExists?.();
+        return;
       }
       setApplyStatus("done");
-      notify(`Copied & saved: ${data.common.full_name || emailToUse || profileUrl}`, "success");
-      onApplied?.();
+      notify(`Added to To Do: ${data.common.full_name || emailToUse || profileUrl}`, "success");
+      onQueued?.();
       onClose?.();
     } catch (err) {
       notify(`Error saving: ${(err as Error).message}`, "error");
@@ -173,7 +171,7 @@ export default function VeeProfilePanel({
 
   function handleApplyClick() {
     if (email) {
-      handleCopyAndApplied(email);
+      handleAddToTodo(email);
       return;
     }
     setEmailPrompt(true);
@@ -184,7 +182,7 @@ export default function VeeProfilePanel({
     const value = emailPromptValue.trim();
     if (!isValidEmail(value)) return;
     setEmailPrompt(false);
-    handleCopyAndApplied(value);
+    handleAddToTodo(value);
   }
 
   const common = data?.common;
@@ -318,10 +316,10 @@ export default function VeeProfilePanel({
                   {applyStatus === "saving"
                     ? "Saving..."
                     : applyStatus === "done"
-                      ? "Copied & Saved ✓"
+                      ? "Added to To Do ✓"
                       : applyStatus === "exists"
                         ? "Already in Records"
-                        : "Copy and Applied"}
+                        : "Add to To Do"}
                 </button>
                 {applyStatus === "error" && (
                   <span className="text-xs font-medium text-red-600 dark:text-red-400">

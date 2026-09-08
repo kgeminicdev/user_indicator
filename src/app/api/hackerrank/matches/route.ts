@@ -1,19 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { pool } from "@/lib/db";
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 20;
 
 export async function GET(request: NextRequest) {
   const pageParam = Number(request.nextUrl.searchParams.get("page"));
   const page = Number.isInteger(pageParam) && pageParam > 0 ? pageParam : 1;
   const offset = (page - 1) * PAGE_SIZE;
+  const showAlreadyInRecords = request.nextUrl.searchParams.get("showAlreadyInRecords") === "true";
+
+  const whereClause = showAlreadyInRecords ? "" : "WHERE already_in_records = false";
 
   const [itemsResult, countResult] = await Promise.all([
     pool.query(
-      `SELECT * FROM scanned_braintrust WHERE status = 'pending' ORDER BY id DESC LIMIT $1 OFFSET $2`,
+      `SELECT id, hacker, hacker_id, name, website, linkedin_url, github_url, resume_url,
+              rank, score, skill, already_in_records, added_to_todo, created_at
+       FROM hackerrank_matches
+       ${whereClause}
+       ORDER BY id DESC
+       LIMIT $1 OFFSET $2`,
       [PAGE_SIZE, offset]
     ),
-    pool.query(`SELECT count(*)::int AS total FROM scanned_braintrust WHERE status = 'pending'`),
+    pool.query(`SELECT count(*)::int AS total FROM hackerrank_matches ${whereClause}`),
   ]);
 
   const total = countResult.rows[0]?.total ?? 0;

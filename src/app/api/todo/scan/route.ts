@@ -123,7 +123,7 @@ export async function POST(request: NextRequest) {
   let newlyQueued = 0;
   for (const r of missing) {
     const insertResult = await pool.query(
-      `INSERT INTO todo (braintrust_id, name, github_url, linkedin_url, linkedin_verified, external_profiles, derived_email)
+      `INSERT INTO scanned_braintrust (braintrust_id, name, github_url, linkedin_url, linkedin_verified, external_profiles, derived_email)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (braintrust_id) DO UPDATE
          SET status = 'pending',
@@ -133,7 +133,7 @@ export async function POST(request: NextRequest) {
              linkedin_verified = EXCLUDED.linkedin_verified,
              external_profiles = EXCLUDED.external_profiles,
              derived_email = EXCLUDED.derived_email
-         WHERE todo.status = 'dismissed'`,
+         WHERE scanned_braintrust.status = 'dismissed'`,
       [
         r.braintrustId,
         r.name,

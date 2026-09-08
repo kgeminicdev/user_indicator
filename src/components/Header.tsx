@@ -5,9 +5,10 @@ import { usePathname } from "next/navigation";
 
 const NAV_ITEMS = [
   { href: "/", label: "Search" },
-  { href: "/braintrust", label: "Braintrust" },
-  { href: "/todo", label: "To Do" },
+  { href: "/braintrust-scan", label: "Braintrust" },
   { href: "/github", label: "GitHub" },
+  { href: "/hackerrank", label: "HackerRank" },
+  { href: "/todo", label: "To Do" },
   { href: "/linkedin", label: "LinkedIn Verify" },
   { href: "/profile", label: "Profile" },
   { href: "/vee-profile", label: "Vee Profile" },

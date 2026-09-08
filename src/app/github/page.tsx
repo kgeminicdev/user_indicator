@@ -3,12 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import VeeProfilePanel from "@/components/VeeProfilePanel";
 import { notify } from "@/components/Toast";
-import type { VeeProfileData } from "@/lib/veeProfileData";
-import { buildVeeApplyContent } from "@/lib/veeProfileFormat";
 
 const MAX_AUTO_RESUME_ATTEMPTS = 5;
 const GENERIC_RETRY_BASE_MS = 30000;
 const GENERIC_RETRY_MAX_MS = 120000;
+
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
 
 type GithubUser = {
   login: string;
@@ -150,6 +152,12 @@ export default function GithubSearchPage() {
   const [applyErrors, setApplyErrors] = useState<Record<string, string>>({});
   const [copiedLinkedinUrl, setCopiedLinkedinUrl] = useState<string | null>(null);
   const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
+  const [emailPrompt, setEmailPrompt] = useState<{
+    id: number;
+    linkedinUrl: string;
+    name: string | null;
+  } | null>(null);
+  const [emailPromptValue, setEmailPromptValue] = useState("");
 
   const autoResumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoResumeAttemptsRef = useRef(0);
@@ -320,9 +328,10 @@ export default function GithubSearchPage() {
     copiedEmailTimerRef.current = setTimeout(() => setCopiedEmail(null), 1500);
   }
 
-  async function handleCopyAndApplied(
+  async function handleAddToTodo(
     linkedinUrl: string,
     email: string | null,
+    name: string | null,
     removeFromView: () => void
   ) {
     setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "saving" }));
@@ -332,9 +341,8 @@ export default function GithubSearchPage() {
       return next;
     });
 
-    // Check records first, before spending a Vee lookup credit — if this
-    // candidate is already known, there's nothing else to do here except
-    // get them out of view.
+    // Check records first — if this candidate is already known, there's
+    // nothing else to do here except get them out of view.
     try {
       const checkRes = await fetch("/api/check-or-add", {
         method: "POST",
@@ -355,46 +363,55 @@ export default function GithubSearchPage() {
       return;
     }
 
+    // No profile fetch here — content is filled in later (background
+    // refill job or the To Do tab's "Get content" button), so Add to To Do
+    // doesn't block on a slow, proxy-dependent Vee lookup.
     try {
-      const res = await fetch(`/api/vee-profile?url=${encodeURIComponent(linkedinUrl)}`);
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error || `request failed (${res.status})`);
-      const profile = body as VeeProfileData;
-      const content = buildVeeApplyContent(profile);
-
-      try {
-        await navigator.clipboard.writeText(content);
-      } catch {
-        // Clipboard access can fail (permissions, insecure context) — still
-        // log it to working history even if the copy itself didn't work.
-      }
-
-      // Save the linkedinUrl we already had on file (matches github_us),
-      // not profile.common.url — Vee returns its own current canonical URL
-      // for the profile, which can use a different vanity slug than what
-      // was originally stored, so matching on it would silently fail.
-      const saveRes = await fetch("/api/working-history", {
+      const saveRes = await fetch("/api/todo-entries", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          name: name || email || linkedinUrl,
           email,
-          linkedinUrl,
-          content,
+          link: linkedinUrl,
+          content: null,
           source: "github",
-          name: profile.common.full_name,
         }),
       });
-      if (!saveRes.ok) {
-        const saveBody = await saveRes.json();
-        throw new Error(saveBody.error || `request failed (${saveRes.status})`);
+      const saveBody = await saveRes.json();
+      if (!saveRes.ok) throw new Error(saveBody.error || `request failed (${saveRes.status})`);
+      if (saveBody.exists) {
+        notify(`Already in records (${email || linkedinUrl}) — removed from view, nothing saved.`);
+        removeFromView();
+        return;
       }
       setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "done" }));
-      notify(`Copied & saved: ${profile.common.full_name || email || linkedinUrl}`, "success");
+      notify(`Added to To Do: ${name || email || linkedinUrl}`, "success");
     } catch (err) {
       notify(`Error saving: ${(err as Error).message}`, "error");
       setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "error" }));
       setApplyErrors((prev) => ({ ...prev, [linkedinUrl]: (err as Error).message }));
     }
+  }
+
+  // github_us.email is nullable in the schema even though the search itself
+  // never inserts a row without one — this is just a defensive backstop so
+  // an edge case never hits the "Provide an email" API error unprompted.
+  function handleSavedListApplyClick(u: SavedGithubUser, linkedinUrl: string) {
+    if (!u.email) {
+      setEmailPrompt({ id: u.id, linkedinUrl, name: u.name });
+      setEmailPromptValue("");
+      return;
+    }
+    handleAddToTodo(linkedinUrl, u.email, u.name, () => handleIgnore(u.id, true));
+  }
+
+  function submitEmailPrompt() {
+    const email = emailPromptValue.trim();
+    if (!emailPrompt || !isValidEmail(email)) return;
+    const { id, linkedinUrl, name } = emailPrompt;
+    setEmailPrompt(null);
+    handleAddToTodo(linkedinUrl, email, name, () => handleIgnore(id, true));
   }
 
   async function handleIgnore(id: number, ignore: boolean) {
@@ -627,7 +644,7 @@ export default function GithubSearchPage() {
                           e.preventDefault();
                           e.stopPropagation();
                           const linkedinUrl = user.linkedinUrl as string;
-                          handleCopyAndApplied(linkedinUrl, user.email, () =>
+                          handleAddToTodo(linkedinUrl, user.email, user.name, () =>
                             setResult((prev) =>
                               prev
                                 ? {
@@ -644,8 +661,8 @@ export default function GithubSearchPage() {
                         {applyStatus[user.linkedinUrl as string] === "saving"
                           ? "Saving..."
                           : applyStatus[user.linkedinUrl as string] === "done"
-                            ? "Copied & Saved ✓"
-                            : "Copy and Applied"}
+                            ? "Added to To Do ✓"
+                            : "Add to To Do"}
                       </button>
                     </div>
                   )}
@@ -748,7 +765,7 @@ export default function GithubSearchPage() {
                   checked={hideApplied}
                   onChange={(e) => setHideApplied(e.target.checked)}
                 />
-                Hide copied
+                Hide added to To Do
               </label>
               <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
                 <input
@@ -769,10 +786,11 @@ export default function GithubSearchPage() {
                 {savedList.items.map((u) => (
                   <div
                     key={u.id}
-                    className={`flex items-center gap-3 rounded-lg border border-black/10 p-3 text-sm dark:border-white/10 ${
+                    className={`flex flex-col gap-3 rounded-lg border border-black/10 p-3 text-sm dark:border-white/10 ${
                       u.ignored ? "opacity-50" : ""
                     }`}
                   >
+                  <div className="flex items-center gap-3">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={u.avatar_url ?? ""}
@@ -844,9 +862,7 @@ export default function GithubSearchPage() {
                           </button>
                           <button
                             onClick={() =>
-                              handleCopyAndApplied(u.linkedin_url as string, u.email, () =>
-                                handleIgnore(u.id, true)
-                              )
+                              handleSavedListApplyClick(u, u.linkedin_url as string)
                             }
                             disabled={
                               u.applied || applyStatus[u.linkedin_url as string] === "saving"
@@ -854,10 +870,10 @@ export default function GithubSearchPage() {
                             className="rounded-full bg-foreground px-3 py-1.5 text-xs font-medium text-background disabled:opacity-40"
                           >
                             {u.applied || applyStatus[u.linkedin_url as string] === "done"
-                              ? "Copied & Saved ✓"
+                              ? "Added to To Do ✓"
                               : applyStatus[u.linkedin_url as string] === "saving"
                                 ? "Saving..."
-                                : "Copy and Applied"}
+                                : "Add to To Do"}
                           </button>
                         </>
                       )}
@@ -868,6 +884,39 @@ export default function GithubSearchPage() {
                         {u.ignored ? "Unignore" : "Ignore"}
                       </button>
                     </div>
+                  </div>
+                  {emailPrompt?.id === u.id && (
+                    <div className="flex flex-wrap items-end gap-3 border-t border-black/10 pt-3 dark:border-white/10">
+                      <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                        Email (required)
+                        <input
+                          type="email"
+                          autoFocus
+                          value={emailPromptValue}
+                          onChange={(e) => setEmailPromptValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") submitEmailPrompt();
+                            if (e.key === "Escape") setEmailPrompt(null);
+                          }}
+                          placeholder="candidate@example.com"
+                          className="w-56 rounded border border-black/15 px-2 py-1.5 text-xs dark:border-white/15 dark:bg-zinc-900"
+                        />
+                      </label>
+                      <button
+                        onClick={submitEmailPrompt}
+                        disabled={!isValidEmail(emailPromptValue.trim())}
+                        className="rounded-full bg-foreground px-4 py-1.5 text-xs font-medium text-background disabled:opacity-40"
+                      >
+                        Continue
+                      </button>
+                      <button
+                        onClick={() => setEmailPrompt(null)}
+                        className="rounded-full border border-black/15 px-4 py-1.5 text-xs font-medium dark:border-white/15"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
                   </div>
                 ))}
                 {savedList.items.length === 0 && (

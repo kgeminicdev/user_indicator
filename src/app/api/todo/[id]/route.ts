@@ -19,7 +19,7 @@ export async function POST(
   }
 
   const todoResult = await pool.query(
-    `SELECT * FROM todo WHERE id = $1 AND status = 'pending'`,
+    `SELECT * FROM scanned_braintrust WHERE id = $1 AND status = 'pending'`,
     [id]
   );
   const todo = todoResult.rows[0];
@@ -59,9 +59,9 @@ export async function POST(
         `INSERT INTO records (name, email, link, other) VALUES ($1, $2, $3, $4)`,
         [name, email, link, "Source: Braintrust"]
       );
-      await client.query(`DELETE FROM todo WHERE id = $1`, [id]);
+      await client.query(`DELETE FROM scanned_braintrust WHERE id = $1`, [id]);
     } else {
-      await client.query(`DELETE FROM todo WHERE id = $1`, [id]);
+      await client.query(`DELETE FROM scanned_braintrust WHERE id = $1`, [id]);
     }
 
     await client.query("COMMIT");

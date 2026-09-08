@@ -1,585 +1,262 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import VeeProfilePanel from "@/components/VeeProfilePanel";
+import { Fragment, useEffect, useState } from "react";
 import { notify } from "@/components/Toast";
-import type { VeeProfileData } from "@/lib/veeProfileData";
-import { buildVeeApplyContent } from "@/lib/veeProfileFormat";
 
-type ExternalProfile = { site: { name: string }; public_url: string };
-
-type TodoItem = {
+type TodoEntry = {
   id: number;
-  braintrust_id: number;
   name: string | null;
-  github_url: string | null;
-  linkedin_url: string | null;
-  linkedin_verified: boolean | null;
-  external_profiles: ExternalProfile[] | null;
-  derived_email: string | null;
-  status: string;
+  email: string | null;
+  link: string;
+  content: string | null;
+  source: string | null;
   created_at: string;
 };
 
-type ScanResult = {
-  scanned: number;
-  alreadyMatched: number;
-  missing: number;
-  newlyQueued: number;
-  alreadyQueued: number;
-};
-
-type TodoPageResult = {
-  items: TodoItem[];
+type TodoEntriesPage = {
+  items: TodoEntry[];
   total: number;
   page: number;
   pageSize: number;
   totalPages: number;
 };
 
-function loadTodos(page: number): Promise<TodoPageResult> {
-  return fetch(`/api/todo?page=${page}`).then((res) => {
+function loadEntries(page: number): Promise<TodoEntriesPage> {
+  return fetch(`/api/todo-entries?page=${page}`).then((res) => {
     if (!res.ok) throw new Error(`request failed (${res.status})`);
     return res.json();
   });
 }
 
-function resolveLinkedinUrl(item: TodoItem): string | null {
-  return (
-    item.linkedin_url ||
-    item.external_profiles?.find((p) => p.site?.name === "LinkedIn")?.public_url ||
-    null
-  );
-}
-
-function isValidEmail(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-}
-
 export default function TodoPage() {
-  const [items, setItems] = useState<TodoItem[]>([]);
-  const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [total, setTotal] = useState(0);
+  const [data, setData] = useState<TodoEntriesPage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [fetchingId, setFetchingId] = useState<number | null>(null);
 
-  const [startId, setStartId] = useState("");
-  const [endId, setEndId] = useState("");
-  const [scanLoading, setScanLoading] = useState(false);
-  const [scanError, setScanError] = useState<string | null>(null);
-  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
-
-  const [selectedLinkedinUrl, setSelectedLinkedinUrl] = useState<string | null>(null);
-  const [selectedEmail, setSelectedEmail] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [applyStatus, setApplyStatus] = useState<Record<string, "saving" | "done" | "error">>({});
-  const [applyErrors, setApplyErrors] = useState<Record<string, string>>({});
-
-  // Braintrust candidates often have no derived email — Copy and Applied
-  // requires one to be typed in first rather than proceeding with a null
-  // email; View works fine without one.
-  const [emailPrompt, setEmailPrompt] = useState<{ id: number; linkedinUrl: string } | null>(
-    null
-  );
-  const [emailPromptValue, setEmailPromptValue] = useState("");
-
-  function applyTodoPage(data: TodoPageResult) {
-    setItems(data.items);
-    setPage(data.page);
-    setTotalPages(data.totalPages);
-    setTotal(data.total);
-  }
-
-  function refresh(targetPage: number) {
+  function refresh(page: number) {
     setLoading(true);
-    return loadTodos(targetPage)
-      .then(applyTodoPage)
+    setError(null);
+    return loadEntries(page)
+      .then(setData)
       .catch((err) => setError((err as Error).message))
       .finally(() => setLoading(false));
   }
 
   useEffect(() => {
-    loadTodos(1)
-      .then(applyTodoPage)
-      .catch((err) => setError((err as Error).message))
-      .finally(() => setLoading(false));
+    refresh(1);
   }, []);
 
-  async function deleteTodo(id: number) {
-    setBusyId(id);
+  async function handleApplied(entry: TodoEntry) {
+    setBusyId(entry.id);
     try {
-      const res = await fetch(`/api/todo/${id}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "delete" }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error ?? "action failed");
+      const clipboardText = [entry.email ? `Email: ${entry.email}` : null, entry.content]
+        .filter(Boolean)
+        .join("\n\n");
+      if (clipboardText) {
+        try {
+          await navigator.clipboard.writeText(clipboardText);
+        } catch {
+          // Clipboard access can fail (permissions, insecure context) —
+          // still finalize the apply either way.
+        }
       }
-      const nextPage = items.length === 1 && page > 1 ? page - 1 : page;
+      const res = await fetch(`/api/todo-entries/${entry.id}/apply`, { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `request failed (${res.status})`);
+      notify(`Applied: ${entry.name || entry.email || entry.link}`, "success");
+      const nextPage = data && data.items.length === 1 && data.page > 1 ? data.page - 1 : data?.page ?? 1;
       await refresh(nextPage);
     } catch (err) {
-      setError((err as Error).message);
+      notify(`Error applying: ${(err as Error).message}`, "error");
     } finally {
       setBusyId(null);
     }
   }
 
-  function handleDelete(item: TodoItem) {
-    const ok = window.confirm(
-      `Permanently delete ${item.name || "this candidate"}? This cannot be undone.`
-    );
-    if (!ok) return;
-    deleteTodo(item.id);
-  }
-
-  async function handleCopyAndApplied(
-    linkedinUrl: string,
-    email: string | null,
-    removeFromView: () => void
-  ) {
-    setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "saving" }));
-    setApplyErrors((prev) => {
-      const next = { ...prev };
-      delete next[linkedinUrl];
-      return next;
-    });
-
-    // Check records first, before spending a Vee lookup credit — if this
-    // candidate is already known, there's nothing else to do here except
-    // get them out of view.
+  async function handleGetContent(entry: TodoEntry) {
+    setFetchingId(entry.id);
     try {
-      const checkRes = await fetch("/api/check-or-add", {
+      const res = await fetch("/api/todo-entries/fetch-content", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email ?? "", link: linkedinUrl, onlySearch: true }),
+        body: JSON.stringify({ id: entry.id }),
       });
-      const checkBody = await checkRes.json();
-      if (!checkRes.ok) throw new Error(checkBody.error || `request failed (${checkRes.status})`);
-      if (checkBody.exists) {
-        notify(`Already in records (${email || linkedinUrl}) — removed from view, nothing saved.`);
-        removeFromView();
-        return;
-      }
-    } catch (err) {
-      notify(`Error checking records: ${(err as Error).message}`, "error");
-      setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "error" }));
-      setApplyErrors((prev) => ({ ...prev, [linkedinUrl]: (err as Error).message }));
-      return;
-    }
-
-    try {
-      const res = await fetch(`/api/vee-profile?url=${encodeURIComponent(linkedinUrl)}`);
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || `request failed (${res.status})`);
-      const profile = body as VeeProfileData;
-      const content = buildVeeApplyContent(profile);
-
-      try {
-        await navigator.clipboard.writeText(content);
-      } catch {
-        // Clipboard access can fail (permissions, insecure context) — still
-        // log it to working history even if the copy itself didn't work.
-      }
-
-      const saveRes = await fetch("/api/working-history", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email,
-          linkedinUrl,
-          content,
-          source: "braintrust",
-          name: profile.common.full_name,
-        }),
-      });
-      if (!saveRes.ok) {
-        const saveBody = await saveRes.json();
-        throw new Error(saveBody.error || `request failed (${saveRes.status})`);
-      }
-      setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "done" }));
-      notify(`Copied & saved: ${profile.common.full_name || email || linkedinUrl}`, "success");
-      removeFromView();
-    } catch (err) {
-      notify(`Error saving: ${(err as Error).message}`, "error");
-      setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "error" }));
-      setApplyErrors((prev) => ({ ...prev, [linkedinUrl]: (err as Error).message }));
-    }
-  }
-
-  function handleViewClick(item: TodoItem, linkedinUrl: string) {
-    setSelectedLinkedinUrl(linkedinUrl);
-    setSelectedEmail(item.derived_email);
-    setSelectedId(item.id);
-  }
-
-  function handleApplyClick(item: TodoItem, linkedinUrl: string) {
-    if (!item.derived_email) {
-      setEmailPrompt({ id: item.id, linkedinUrl });
-      setEmailPromptValue("");
-      return;
-    }
-    handleCopyAndApplied(linkedinUrl, item.derived_email, () => deleteTodo(item.id));
-  }
-
-  function submitEmailPrompt() {
-    const email = emailPromptValue.trim();
-    if (!emailPrompt || !isValidEmail(email)) return;
-    const { id, linkedinUrl } = emailPrompt;
-    setEmailPrompt(null);
-    handleCopyAndApplied(linkedinUrl, email, () => deleteTodo(id));
-  }
-
-  async function handleScan(e: React.FormEvent) {
-    e.preventDefault();
-    setScanLoading(true);
-    setScanError(null);
-    setScanResult(null);
-    try {
-      const res = await fetch("/api/todo/scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          startId: Number(startId),
-          endId: Number(endId),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setScanError(data.error ?? "scan failed");
+      if (body.updated > 0) {
+        notify(`Content fetched: ${entry.name || entry.email || entry.link}`, "success");
+      } else if (body.failed > 0) {
+        throw new Error(body.failures[0] || "Failed to fetch content");
       } else {
-        setScanResult(data);
-        await refresh(1);
+        notify(`Nothing to fetch: ${entry.name || entry.email || entry.link}`);
       }
+      await refresh(data?.page ?? 1);
     } catch (err) {
-      setScanError(`Could not reach the server (${(err as Error).message})`);
+      notify(`Error fetching content: ${(err as Error).message}`, "error");
     } finally {
-      setScanLoading(false);
+      setFetchingId(null);
+    }
+  }
+
+  async function handleRemove(entry: TodoEntry) {
+    const ok = window.confirm(
+      `Remove ${entry.name || entry.email || entry.link} from To Do? This cannot be undone.`
+    );
+    if (!ok) return;
+
+    setBusyId(entry.id);
+    try {
+      const res = await fetch(`/api/todo-entries/${entry.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`request failed (${res.status})`);
+      notify(`Removed: ${entry.name || entry.email || entry.link}`);
+      const nextPage = data && data.items.length === 1 && data.page > 1 ? data.page - 1 : data?.page ?? 1;
+      await refresh(nextPage);
+    } catch (err) {
+      notify(`Error removing: ${(err as Error).message}`, "error");
+    } finally {
+      setBusyId(null);
     }
   }
 
   return (
-    <div className="flex min-h-screen bg-zinc-50 font-sans dark:bg-black">
-      <div className="flex flex-1 justify-center">
-        <main className="flex w-full max-w-3xl flex-col gap-8 py-16 px-6">
-          <div>
-            <h1 className="text-2xl font-semibold text-black dark:text-zinc-50">
-              To Do
-            </h1>
-            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-              Braintrust users not yet found in your records. View their
-              LinkedIn profile and use Copy and Applied to log outreach and
-              save them to your records. Delete removes a candidate
-              permanently.
-            </p>
-          </div>
+    <div className="flex flex-col min-h-screen items-center bg-zinc-50 font-sans dark:bg-black">
+      <main className="flex w-full max-w-4xl flex-col gap-8 py-16 px-6">
+        <div>
+          <h1 className="text-2xl font-semibold text-black dark:text-zinc-50">
+            To Do
+          </h1>
+          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+            Candidates staged from GitHub, Braintrust, and HackerRank. Content is fetched from
+            LinkedIn in the background — use &quot;Get content&quot; to fetch it now instead of
+            waiting. Copy and Applied copies the email and content to your clipboard and moves
+            them to records and working history; Remove discards them.
+          </p>
+        </div>
 
-          <form
-            onSubmit={handleScan}
-            className="flex flex-col gap-3 rounded-lg border border-black/10 p-4 dark:border-white/10"
-          >
-            <div className="flex items-end gap-3">
-              <label className="flex flex-col gap-1 text-sm">
-                Start Braintrust ID
-                <input
-                  type="number"
-                  value={startId}
-                  onChange={(e) => setStartId(e.target.value)}
-                  placeholder="e.g. 100"
-                  disabled={scanLoading}
-                  className="w-32 rounded border border-black/15 px-3 py-2 text-sm dark:border-white/15 dark:bg-zinc-900 disabled:opacity-50"
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                End Braintrust ID
-                <input
-                  type="number"
-                  value={endId}
-                  onChange={(e) => setEndId(e.target.value)}
-                  placeholder="e.g. 200"
-                  disabled={scanLoading}
-                  className="w-32 rounded border border-black/15 px-3 py-2 text-sm dark:border-white/15 dark:bg-zinc-900 disabled:opacity-50"
-                />
-              </label>
-              <button
-                type="submit"
-                disabled={scanLoading || !startId || !endId}
-                className="flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-40"
-              >
-                {scanLoading && (
-                  <span
-                    aria-hidden
-                    className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-background/40 border-t-background"
-                  />
-                )}
-                {scanLoading ? "Scanning..." : "Scan range"}
-              </button>
-            </div>
-            <p className="text-xs text-zinc-500">
-              Scans Engineering profiles with an external profile in that
-              Braintrust ID range, checks them against your records (GitHub
-              URL, LinkedIn URL, or a GitHub-derived email), and queues
-              unmatched ones below. Any LinkedIn link found is also checked
-              against the LinkedIn verify tool and shown as verified or not —
-              an unverified link doesn&apos;t exclude the candidate, it&apos;s
-              just a signal. Wider ranges take longer and use more GitHub API
-              calls.
-            </p>
+        {loading && <p className="text-sm text-zinc-500">Loading...</p>}
+        {error && (
+          <p className="text-sm font-medium text-red-600 dark:text-red-400">Error: {error}</p>
+        )}
 
-            {scanLoading && (
-              <div className="flex items-center gap-2 rounded-lg border border-black/10 bg-black/[.02] px-3 py-2 text-sm text-zinc-600 dark:border-white/10 dark:bg-white/[.03] dark:text-zinc-400">
-                <span
-                  aria-hidden
-                  className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-zinc-400/40 border-t-zinc-500 dark:border-zinc-500/40 dark:border-t-zinc-300"
-                />
-                Working — scanning {startId}–{endId} and checking GitHub for
-                missing emails. This can take a bit for larger ranges.
-              </div>
-            )}
-
-            {scanError && (
-              <p className="text-sm font-medium text-red-600 dark:text-red-400">
-                Error: {scanError}
-              </p>
-            )}
-            {scanResult && (
-              <div>
-                <h2 className="mb-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                  Results for {startId}–{endId}
-                </h2>
-                <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                  <Stat
-                    label="Matches condition"
-                    value={scanResult.scanned.toLocaleString()}
-                  />
-                  <Stat
-                    label="Already found"
-                    value={scanResult.alreadyMatched.toLocaleString()}
-                  />
-                  <Stat
-                    label="Newly queued"
-                    value={scanResult.newlyQueued.toLocaleString()}
-                  />
-                  <Stat
-                    label="Already queued"
-                    value={scanResult.alreadyQueued.toLocaleString()}
-                  />
-                </div>
-              </div>
-            )}
-          </form>
-
-          {loading && <p className="text-sm text-zinc-500">Loading...</p>}
-
-          {error && (
-            <p className="text-sm font-medium text-red-600 dark:text-red-400">
-              Error: {error}
-            </p>
-          )}
-
-          {!loading && total === 0 && !error && (
-            <p className="text-sm text-zinc-500">Nothing pending.</p>
-          )}
-
-          <div className="flex flex-col gap-3">
-            {items.map((item) => {
-              const linkedinUrl = resolveLinkedinUrl(item);
-              return (
-                <div
-                  key={item.id}
-                  className="flex flex-col gap-2 rounded-lg border border-black/10 p-4 text-sm dark:border-white/10 sm:flex-row sm:items-center sm:justify-between"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="font-medium text-black dark:text-zinc-50">
-                      {item.name || "—"}
-                    </div>
-                    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-600 dark:text-zinc-400">
-                      <a
-                        href={`https://app.usebraintrust.com/talent/${item.braintrust_id}/`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-600 underline dark:text-blue-400"
-                      >
-                        Braintrust
-                      </a>
-                      {item.external_profiles && item.external_profiles.length > 0 ? (
-                        item.external_profiles.map((p, i) => (
+        {data && (
+          <>
+            <div className="overflow-x-auto rounded-lg border border-black/10 dark:border-white/10">
+              <table className="w-full text-left text-sm">
+                <thead className="border-b border-black/10 bg-black/[.02] text-xs text-zinc-500 dark:border-white/10 dark:bg-white/[.03] dark:text-zinc-400">
+                  <tr>
+                    <th className="whitespace-nowrap px-3 py-2 font-medium">Name</th>
+                    <th className="whitespace-nowrap px-3 py-2 font-medium">Email</th>
+                    <th className="whitespace-nowrap px-3 py-2 font-medium">Link</th>
+                    <th className="whitespace-nowrap px-3 py-2 font-medium">Source</th>
+                    <th className="whitespace-nowrap px-3 py-2 font-medium">Content</th>
+                    <th className="whitespace-nowrap px-3 py-2 font-medium">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.items.map((entry) => (
+                    <Fragment key={entry.id}>
+                      <tr className="border-b border-black/5 last:border-0 dark:border-white/5">
+                        <td className="px-3 py-2">{entry.name ?? "—"}</td>
+                        <td className="px-3 py-2">{entry.email ?? "—"}</td>
+                        <td className="px-3 py-2">
                           <a
-                            key={i}
-                            href={p.public_url}
+                            href={entry.link}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-blue-600 underline dark:text-blue-400"
                           >
-                            {p.site?.name ?? "Link"}
-                            {p.site?.name === "LinkedIn" &&
-                              item.linkedin_verified !== null &&
-                              (item.linkedin_verified ? " ✓" : " (unverified)")}
+                            Link
                           </a>
-                        ))
-                      ) : (
-                        <>
-                          {item.github_url && (
-                            <a
-                              href={item.github_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-blue-600 underline dark:text-blue-400"
+                        </td>
+                        <td className="px-3 py-2 capitalize text-zinc-600 dark:text-zinc-400">
+                          {entry.source ?? "—"}
+                        </td>
+                        <td className="px-3 py-2">
+                          {entry.content ? (
+                            <button
+                              onClick={() =>
+                                setExpandedId(expandedId === entry.id ? null : entry.id)
+                              }
+                              className="text-xs text-zinc-500 underline"
                             >
-                              GitHub
-                            </a>
-                          )}
-                          {item.linkedin_url && (
-                            <a
-                              href={item.linkedin_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-blue-600 underline dark:text-blue-400"
+                              {expandedId === entry.id ? "Hide" : "Show"}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleGetContent(entry)}
+                              disabled={fetchingId === entry.id}
+                              className="whitespace-nowrap rounded-full border border-black/15 px-2.5 py-1 text-xs font-medium text-zinc-600 disabled:opacity-40 dark:border-white/15 dark:text-zinc-400"
                             >
-                              LinkedIn
-                              {item.linkedin_verified !== null &&
-                                (item.linkedin_verified ? " ✓" : " (unverified)")}
-                            </a>
+                              {fetchingId === entry.id ? "Fetching..." : "Get content"}
+                            </button>
                           )}
-                        </>
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex shrink-0 flex-nowrap items-center gap-2">
+                            <button
+                              onClick={() => handleApplied(entry)}
+                              disabled={busyId === entry.id}
+                              className="whitespace-nowrap rounded-full bg-foreground px-3 py-1.5 text-xs font-medium text-background disabled:opacity-40"
+                            >
+                              Copy and Applied
+                            </button>
+                            <button
+                              onClick={() => handleRemove(entry)}
+                              disabled={busyId === entry.id}
+                              className="whitespace-nowrap rounded-full border border-red-300 px-3 py-1.5 text-xs font-medium text-red-600 dark:border-red-900 dark:text-red-400 disabled:opacity-40"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      {expandedId === entry.id && entry.content && (
+                        <tr className="border-b border-black/5 dark:border-white/5">
+                          <td colSpan={6} className="px-3 py-2">
+                            <p className="whitespace-pre-line rounded-lg border border-black/10 p-3 text-xs text-zinc-600 dark:border-white/10 dark:text-zinc-400">
+                              {entry.content}
+                            </p>
+                          </td>
+                        </tr>
                       )}
-                      {item.derived_email && <span>{item.derived_email}</span>}
-                    </div>
-                    {linkedinUrl &&
-                      applyStatus[linkedinUrl] === "error" &&
-                      applyErrors[linkedinUrl] && (
-                        <div className="mt-1 text-[11px] font-medium text-red-600 dark:text-red-400">
-                          {applyErrors[linkedinUrl]}
-                        </div>
-                      )}
-                  </div>
-                  {emailPrompt?.id === item.id ? (
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="email"
-                        autoFocus
-                        value={emailPromptValue}
-                        onChange={(e) => setEmailPromptValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") submitEmailPrompt();
-                          if (e.key === "Escape") setEmailPrompt(null);
-                        }}
-                        placeholder="Email required"
-                        className="w-48 rounded border border-black/15 px-2 py-1.5 text-xs dark:border-white/15 dark:bg-zinc-900"
-                      />
-                      <button
-                        onClick={submitEmailPrompt}
-                        disabled={!isValidEmail(emailPromptValue.trim())}
-                        className="rounded-full bg-foreground px-4 py-1.5 text-xs font-medium text-background disabled:opacity-40"
-                      >
-                        Continue
-                      </button>
-                      <button
-                        onClick={() => setEmailPrompt(null)}
-                        className="rounded-full border border-black/15 px-4 py-1.5 text-xs font-medium dark:border-white/15"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex shrink-0 flex-nowrap items-center justify-end gap-2">
-                      {linkedinUrl && (
-                        <>
-                          <button
-                            onClick={() => handleViewClick(item, linkedinUrl)}
-                            className="rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
-                          >
-                            View
-                          </button>
-                          <button
-                            onClick={() => handleApplyClick(item, linkedinUrl)}
-                            disabled={applyStatus[linkedinUrl] === "saving"}
-                            className="rounded-full bg-foreground px-3 py-1.5 text-xs font-medium text-background disabled:opacity-40"
-                          >
-                            {applyStatus[linkedinUrl] === "saving"
-                              ? "Saving..."
-                              : applyStatus[linkedinUrl] === "done"
-                                ? "Copied & Saved ✓"
-                                : "Copy and Applied"}
-                          </button>
-                        </>
-                      )}
-                      <button
-                        onClick={() => handleDelete(item)}
-                        disabled={busyId === item.id}
-                        className="rounded-full border border-red-300 px-3 py-1.5 text-xs font-medium text-red-600 dark:border-red-900 dark:text-red-400 disabled:opacity-40"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {total > 0 && (
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-zinc-500">
-                Page {page} of {totalPages} ({total} pending)
-              </span>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => refresh(page - 1)}
-                  disabled={page <= 1 || loading}
-                  className="rounded-full border border-black/15 px-4 py-1.5 text-xs font-medium dark:border-white/15 disabled:opacity-40"
-                >
-                  Previous
-                </button>
-                <button
-                  onClick={() => refresh(page + 1)}
-                  disabled={page >= totalPages || loading}
-                  className="rounded-full border border-black/15 px-4 py-1.5 text-xs font-medium dark:border-white/15 disabled:opacity-40"
-                >
-                  Next
-                </button>
-              </div>
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+              {data.items.length === 0 && (
+                <p className="p-4 text-sm text-zinc-500">Nothing to do.</p>
+              )}
             </div>
-          )}
-        </main>
-      </div>
-      {selectedLinkedinUrl && (
-        <aside className="sticky top-0 h-screen w-1/2 shrink-0 overflow-y-auto border-l border-black/10 bg-white dark:border-white/10 dark:bg-zinc-950">
-          <VeeProfilePanel
-            profileUrl={selectedLinkedinUrl}
-            email={selectedEmail}
-            source="braintrust"
-            onClose={() => {
-              setSelectedLinkedinUrl(null);
-              setSelectedEmail(null);
-              setSelectedId(null);
-            }}
-            onAlreadyExists={() => {
-              if (selectedId != null) deleteTodo(selectedId);
-              setSelectedLinkedinUrl(null);
-              setSelectedEmail(null);
-              setSelectedId(null);
-            }}
-            onApplied={() => {
-              if (selectedId != null) deleteTodo(selectedId);
-            }}
-          />
-        </aside>
-      )}
-    </div>
-  );
-}
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-black/10 p-3 dark:border-white/10">
-      <div className="text-lg font-semibold text-black dark:text-zinc-50">
-        {value}
-      </div>
-      <div className="text-xs text-zinc-500">{label}</div>
+            {data.total > 0 && (
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-zinc-500">
+                  Page {data.page} of {data.totalPages} ({data.total.toLocaleString()} total)
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => refresh(data.page - 1)}
+                    disabled={data.page <= 1 || loading}
+                    className="rounded-full border border-black/15 px-4 py-1.5 text-xs font-medium dark:border-white/15 disabled:opacity-40"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    onClick={() => refresh(data.page + 1)}
+                    disabled={data.page >= data.totalPages || loading}
+                    className="rounded-full border border-black/15 px-4 py-1.5 text-xs font-medium dark:border-white/15 disabled:opacity-40"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </main>
     </div>
   );
 }

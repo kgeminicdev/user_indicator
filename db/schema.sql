@@ -6,7 +6,9 @@ CREATE TABLE IF NOT EXISTS records (
   other            TEXT
 );
 
-CREATE TABLE IF NOT EXISTS todo (
+-- Braintrust ID-range scan queue (the Braintrust tab) — named apart from
+-- todo_entries (the unified "To Do" tab) to avoid confusion between the two.
+CREATE TABLE IF NOT EXISTS scanned_braintrust (
   id                  SERIAL PRIMARY KEY,
   braintrust_id       INTEGER NOT NULL UNIQUE,
   name                TEXT,
@@ -20,7 +22,7 @@ CREATE TABLE IF NOT EXISTS todo (
   created_at          TIMESTAMP NOT NULL DEFAULT now()
 );
 
-ALTER TABLE todo ADD COLUMN IF NOT EXISTS linkedin_verified BOOLEAN;
+ALTER TABLE scanned_braintrust ADD COLUMN IF NOT EXISTS linkedin_verified BOOLEAN;
 
 CREATE TABLE IF NOT EXISTS github_us (
   id                    SERIAL PRIMARY KEY,
@@ -109,3 +111,55 @@ CREATE TABLE IF NOT EXISTS vee_proxy_ips (
 
 ALTER TABLE vee_proxy_ips ADD COLUMN IF NOT EXISTS credits_used_today INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE vee_proxy_ips ADD COLUMN IF NOT EXISTS credits_used_date DATE;
+
+-- Persisted HackerRank leaderboard matches (contact-info found), deduped by
+-- hacker username — a later scan skips anyone already here instead of
+-- re-fetching and re-verifying them.
+CREATE TABLE IF NOT EXISTS hackerrank_matches (
+  id                    SERIAL PRIMARY KEY,
+  hacker                TEXT NOT NULL UNIQUE,
+  hacker_id             INTEGER,
+  name                  TEXT,
+  website               TEXT,
+  linkedin_url          TEXT,
+  github_url            TEXT,
+  resume_url            TEXT,
+  rank                  INTEGER,
+  score                 NUMERIC,
+  skill                 TEXT,
+  already_in_records    BOOLEAN NOT NULL DEFAULT false,
+  added_to_todo         BOOLEAN NOT NULL DEFAULT false,
+  created_at            TIMESTAMP NOT NULL DEFAULT now()
+);
+
+-- Checkpointed HackerRank scan progress, same resumable pattern as
+-- github_us_searches — a scan across many leaderboard pages can be
+-- interrupted and picked back up from current_page.
+-- The unified staging queue candidates from GitHub, Braintrust, and
+-- HackerRank all funnel into before a final decision (Applied moves them to
+-- records + working_history; Remove just discards the entry).
+CREATE TABLE IF NOT EXISTS todo_entries (
+  id           SERIAL PRIMARY KEY,
+  name         TEXT,
+  email        TEXT,
+  link         TEXT NOT NULL,
+  content      TEXT,
+  source       TEXT,
+  created_at   TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS hackerrank_scans (
+  id                  SERIAL PRIMARY KEY,
+  skill               TEXT NOT NULL,
+  start_page          INTEGER NOT NULL,
+  end_page            INTEGER NOT NULL,
+  current_page        INTEGER NOT NULL DEFAULT 0,
+  status              TEXT NOT NULL DEFAULT 'in_progress',
+  scanned             INTEGER NOT NULL DEFAULT 0,
+  matched             INTEGER NOT NULL DEFAULT 0,
+  already_in_db       INTEGER NOT NULL DEFAULT 0,
+  already_in_records  INTEGER NOT NULL DEFAULT 0,
+  error_message       TEXT,
+  created_at          TIMESTAMP NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMP NOT NULL DEFAULT now()
+);

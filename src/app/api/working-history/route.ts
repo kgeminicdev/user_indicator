@@ -57,7 +57,7 @@ export async function GET(request: NextRequest) {
   });
 }
 
-const VALID_SOURCES = new Set(["github", "braintrust"]);
+const VALID_SOURCES = new Set(["github", "braintrust", "hackerrank"]);
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
@@ -100,7 +100,9 @@ export async function POST(request: NextRequest) {
         ? "Source: Github"
         : source === "braintrust"
           ? "Source: Braintrust"
-          : "Source: Copy and Applied";
+          : source === "hackerrank"
+            ? "Source: HackerRank"
+            : "Source: Copy and Applied";
     await pool.query(
       `INSERT INTO records (name, email, link, other) VALUES ($1, $2, $3, $4)`,
       [resolvedName, email, linkedinUrl, sourceLabel]
