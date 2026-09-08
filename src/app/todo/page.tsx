@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { notify } from "@/components/Toast";
 
 type TodoEntry = {
@@ -52,6 +52,14 @@ export default function TodoPage() {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [fetchingId, setFetchingId] = useState<number | null>(null);
   const [stats, setStats] = useState<TodoStats | null>(null);
+  const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
+  const copiedEmailTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copiedEmailTimerRef.current) clearTimeout(copiedEmailTimerRef.current);
+    };
+  }, []);
 
   function refresh(page: number) {
     setLoading(true);
@@ -72,6 +80,18 @@ export default function TodoPage() {
     refresh(1);
     refreshStats();
   }, []);
+
+  async function handleCopyEmail(email: string) {
+    try {
+      await navigator.clipboard.writeText(email);
+    } catch {
+      // Clipboard access can fail (permissions, insecure context) — the
+      // "Copied" feedback below is best-effort either way.
+    }
+    if (copiedEmailTimerRef.current) clearTimeout(copiedEmailTimerRef.current);
+    setCopiedEmail(email);
+    copiedEmailTimerRef.current = setTimeout(() => setCopiedEmail(null), 1500);
+  }
 
   async function handleApplied(entry: TodoEntry) {
     setBusyId(entry.id);
@@ -198,7 +218,19 @@ export default function TodoPage() {
                     <Fragment key={entry.id}>
                       <tr className="border-b border-black/5 last:border-0 dark:border-white/5">
                         <td className="px-3 py-2">{entry.name ?? "—"}</td>
-                        <td className="px-3 py-2">{entry.email ?? "—"}</td>
+                        <td className="px-3 py-2">
+                          {entry.email ? (
+                            <button
+                              onClick={() => handleCopyEmail(entry.email as string)}
+                              className="underline decoration-dotted underline-offset-2"
+                              title="Copy email"
+                            >
+                              {copiedEmail === entry.email ? "Copied ✓" : entry.email}
+                            </button>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
                         <td className="px-3 py-2">
                           <a
                             href={entry.link}
