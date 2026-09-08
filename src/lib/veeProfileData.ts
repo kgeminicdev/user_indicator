@@ -112,6 +112,24 @@ export class VeeProfileError extends Error {
 
 const hasProxyConfig = VEE_PROXY_IP_LIST.length > 0 && !!VEE_PROXY_USERNAME && !!VEE_PROXY_PASSWORD;
 
+// Proxy IPs periodically go stale/unreachable (the whole pool has been
+// observed dead at once, not just individual entries) — without a timeout, a
+// single hung proxy connection blocks the request indefinitely instead of
+// failing over to the next candidate. Kept short since a live proxy connects
+// almost instantly; this is purely a reachability check.
+const VEE_PROXY_TIMEOUT_MS = 8000;
+
+// The direct (non-proxied) attempt is the last resort, so it's given much
+// more room — a fresh, not-yet-cached profile genuinely takes Vee a while to
+// scrape, and cutting that off at the same short timeout used for weeding
+// out dead proxies would fail a request that was actually working.
+const VEE_DIRECT_TIMEOUT_MS = 45000;
+
+// If the whole configured pool is down, trying all of them sequentially
+// (even at 8s each) could take minutes. Cap how many proxy IPs get tried
+// before falling back to a direct (non-proxied) request.
+const MAX_PROXY_ATTEMPTS = 5;
+
 const proxyDispatchers = new Map<string, Dispatcher>();
 
 function getDispatcherForIp(ip: string): Dispatcher {
@@ -242,7 +260,12 @@ async function veeFetch(
   init: RequestInit = {},
   ip?: string
 ): Promise<Response> {
-  if (!ip) return fetch(input, init);
+  // Proxied attempts only need to prove the IP is reachable, so they get the
+  // short timeout; the direct fallback is where real scraping work actually
+  // happens, so it gets much more room.
+  const signal = AbortSignal.timeout(ip ? VEE_PROXY_TIMEOUT_MS : VEE_DIRECT_TIMEOUT_MS);
+
+  if (!ip) return fetch(input, { ...init, signal });
 
   // Node's global fetch and the npm `undici` package are separate instances
   // — handing the global fetch a Dispatcher built by this package's
@@ -250,6 +273,7 @@ async function veeFetch(
   // undici's own fetch must be used whenever a dispatcher is involved.
   return undiciFetch(input as string, {
     ...init,
+    signal,
     dispatcher: getDispatcherForIp(ip),
   } as Parameters<typeof undiciFetch>[1]) as unknown as Promise<Response>;
 }
@@ -273,7 +297,15 @@ export async function fetchVeeProfile(profileUrl: string): Promise<VeeProfileDat
   // skipped up front instead of re-discovering that via a live 403 round
   // trip on every request — a fresh 403 here still marks the IP exhausted
   // so every later request (and every later server restart) skips it too.
-  const candidates: (string | undefined)[] = hasProxyConfig ? await pickCandidateIps() : [undefined];
+  //
+  // A final `undefined` candidate (direct, no proxy) is always appended when
+  // proxies are configured — if the whole pool is unreachable (the entire
+  // pool has been observed dead at once, not just individual IPs), the
+  // server's own IP still has its own separate daily free-tier credits and
+  // should be tried before giving up entirely.
+  const candidates: (string | undefined)[] = hasProxyConfig
+    ? [...(await pickCandidateIps()).slice(0, MAX_PROXY_ATTEMPTS), undefined]
+    : [undefined];
 
   let response: Response | undefined;
   let lastError: VeeProfileError | undefined;
@@ -303,7 +335,7 @@ export async function fetchVeeProfile(profileUrl: string): Promise<VeeProfileDat
     throw (
       lastError ??
       new VeeProfileError(
-        `All configured proxy IPs are exhausted for today — try again after the daily reset.`
+        `All configured proxy IPs${hasProxyConfig ? " and the direct connection" : ""} are exhausted for today — try again after the daily reset.`
       )
     );
   }
