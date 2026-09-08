@@ -72,16 +72,15 @@ export default function BraintrustScanPage() {
   const [selectedLinkedinUrl, setSelectedLinkedinUrl] = useState<string | null>(null);
   const [selectedEmail, setSelectedEmail] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [applyStatus, setApplyStatus] = useState<Record<string, "saving" | "done" | "error">>({});
-  const [applyErrors, setApplyErrors] = useState<Record<string, string>>({});
+  const [applyStatus, setApplyStatus] = useState<Record<number, "saving" | "done" | "error">>({});
+  const [applyErrors, setApplyErrors] = useState<Record<number, string>>({});
 
-  // Braintrust candidates often have no derived email — Add to To Do
-  // requires one to be typed in first rather than proceeding with a null
-  // email; View works fine without one.
-  const [emailPrompt, setEmailPrompt] = useState<{ id: number; linkedinUrl: string } | null>(
-    null
-  );
+  // Braintrust candidates often have no derived email and/or no LinkedIn
+  // link — Add to To Do requires both, so when either is missing this opens
+  // an expanded row prompting for both together (same pattern as HackerRank).
+  const [addPromptId, setAddPromptId] = useState<number | null>(null);
   const [emailPromptValue, setEmailPromptValue] = useState("");
+  const [linkedinPromptValue, setLinkedinPromptValue] = useState("");
 
   function applyTodoPage(data: TodoPageResult) {
     setItems(data.items);
@@ -135,15 +134,16 @@ export default function BraintrustScanPage() {
   }
 
   async function handleAddToTodo(
+    itemId: number,
     linkedinUrl: string,
-    email: string | null,
+    email: string,
     name: string | null,
     removeFromView: () => void
   ) {
-    setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "saving" }));
+    setApplyStatus((prev) => ({ ...prev, [itemId]: "saving" }));
     setApplyErrors((prev) => {
       const next = { ...prev };
-      delete next[linkedinUrl];
+      delete next[itemId];
       return next;
     });
 
@@ -154,7 +154,7 @@ export default function BraintrustScanPage() {
       const checkRes = await fetch("/api/check-or-add", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email ?? "", link: linkedinUrl, onlySearch: true }),
+        body: JSON.stringify({ email, link: linkedinUrl, onlySearch: true }),
       });
       const checkBody = await checkRes.json();
       if (!checkRes.ok) throw new Error(checkBody.error || `request failed (${checkRes.status})`);
@@ -165,8 +165,8 @@ export default function BraintrustScanPage() {
       }
     } catch (err) {
       notify(`Error checking records: ${(err as Error).message}`, "error");
-      setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "error" }));
-      setApplyErrors((prev) => ({ ...prev, [linkedinUrl]: (err as Error).message }));
+      setApplyStatus((prev) => ({ ...prev, [itemId]: "error" }));
+      setApplyErrors((prev) => ({ ...prev, [itemId]: (err as Error).message }));
       return;
     }
 
@@ -192,13 +192,13 @@ export default function BraintrustScanPage() {
         removeFromView();
         return;
       }
-      setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "done" }));
+      setApplyStatus((prev) => ({ ...prev, [itemId]: "done" }));
       notify(`Added to To Do: ${name || email || linkedinUrl}`, "success");
       removeFromView();
     } catch (err) {
       notify(`Error saving: ${(err as Error).message}`, "error");
-      setApplyStatus((prev) => ({ ...prev, [linkedinUrl]: "error" }));
-      setApplyErrors((prev) => ({ ...prev, [linkedinUrl]: (err as Error).message }));
+      setApplyStatus((prev) => ({ ...prev, [itemId]: "error" }));
+      setApplyErrors((prev) => ({ ...prev, [itemId]: (err as Error).message }));
     }
   }
 
@@ -208,22 +208,24 @@ export default function BraintrustScanPage() {
     setSelectedId(item.id);
   }
 
-  function handleApplyClick(item: TodoItem, linkedinUrl: string) {
-    if (!item.derived_email) {
-      setEmailPrompt({ id: item.id, linkedinUrl });
-      setEmailPromptValue("");
+  function handleAddClick(item: TodoItem, linkedinUrl: string | null) {
+    if (item.derived_email && linkedinUrl) {
+      handleAddToTodo(item.id, linkedinUrl, item.derived_email, item.name, () =>
+        deleteTodo(item.id)
+      );
       return;
     }
-    handleAddToTodo(linkedinUrl, item.derived_email, item.name, () => deleteTodo(item.id));
+    setAddPromptId(item.id);
+    setEmailPromptValue(item.derived_email ?? "");
+    setLinkedinPromptValue(linkedinUrl ?? "");
   }
 
-  function submitEmailPrompt() {
+  function submitAddPrompt(item: TodoItem) {
     const email = emailPromptValue.trim();
-    if (!emailPrompt || !isValidEmail(email)) return;
-    const { id, linkedinUrl } = emailPrompt;
-    const item = items.find((i) => i.id === id);
-    setEmailPrompt(null);
-    handleAddToTodo(linkedinUrl, email, item?.name ?? null, () => deleteTodo(id));
+    const linkedinUrl = linkedinPromptValue.trim();
+    if (!isValidEmail(email) || !linkedinUrl) return;
+    setAddPromptId(null);
+    handleAddToTodo(item.id, linkedinUrl, email, item.name, () => deleteTodo(item.id));
   }
 
   async function handleScan(e: React.FormEvent) {
@@ -441,46 +443,42 @@ export default function BraintrustScanPage() {
                       )}
                       {item.derived_email && <span>{item.derived_email}</span>}
                     </div>
-                    {linkedinUrl &&
-                      applyStatus[linkedinUrl] === "error" &&
-                      applyErrors[linkedinUrl] && (
-                        <div className="mt-1 text-[11px] font-medium text-red-600 dark:text-red-400">
-                          {applyErrors[linkedinUrl]}
-                        </div>
-                      )}
+                    {applyStatus[item.id] === "error" && applyErrors[item.id] && (
+                      <div className="mt-1 text-[11px] font-medium text-red-600 dark:text-red-400">
+                        {applyErrors[item.id]}
+                      </div>
+                    )}
                   </div>
                   <div className="flex shrink-0 flex-nowrap items-center justify-end gap-2">
                     {linkedinUrl && (
-                      <>
-                        <button
-                          onClick={() => handleViewClick(item, linkedinUrl)}
-                          className="rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
-                        >
-                          View
-                        </button>
-                        <button
-                          onClick={() => handleApplyClick(item, linkedinUrl)}
-                          disabled={applyStatus[linkedinUrl] === "saving"}
-                          className="rounded-full bg-foreground px-3 py-1.5 text-xs font-medium text-background disabled:opacity-40"
-                        >
-                          {applyStatus[linkedinUrl] === "saving"
-                            ? "Saving..."
-                            : applyStatus[linkedinUrl] === "done"
-                              ? "Added to To Do ✓"
-                              : "Add to To Do"}
-                        </button>
-                      </>
+                      <button
+                        onClick={() => handleViewClick(item, linkedinUrl)}
+                        className="rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
+                      >
+                        View
+                      </button>
                     )}
+                    <button
+                      onClick={() => handleAddClick(item, linkedinUrl)}
+                      disabled={applyStatus[item.id] === "saving"}
+                      className="whitespace-nowrap rounded-full bg-foreground px-3 py-1.5 text-xs font-medium text-background disabled:opacity-40"
+                    >
+                      {applyStatus[item.id] === "saving"
+                        ? "Saving..."
+                        : applyStatus[item.id] === "done"
+                          ? "Added to To Do ✓"
+                          : "Add to To Do"}
+                    </button>
                     <button
                       onClick={() => handleDelete(item)}
                       disabled={busyId === item.id}
-                      className="rounded-full border border-red-300 px-3 py-1.5 text-xs font-medium text-red-600 dark:border-red-900 dark:text-red-400 disabled:opacity-40"
+                      className="whitespace-nowrap rounded-full border border-red-300 px-3 py-1.5 text-xs font-medium text-red-600 dark:border-red-900 dark:text-red-400 disabled:opacity-40"
                     >
                       Delete
                     </button>
                   </div>
                 </div>
-                {emailPrompt?.id === item.id && (
+                {addPromptId === item.id && (
                   <div className="flex flex-wrap items-end gap-3 border-t border-black/10 pt-3 dark:border-white/10">
                     <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
                       Email (required)
@@ -490,22 +488,35 @@ export default function BraintrustScanPage() {
                         value={emailPromptValue}
                         onChange={(e) => setEmailPromptValue(e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter") submitEmailPrompt();
-                          if (e.key === "Escape") setEmailPrompt(null);
+                          if (e.key === "Escape") setAddPromptId(null);
                         }}
                         placeholder="candidate@example.com"
                         className="w-56 rounded border border-black/15 px-2 py-1.5 text-xs dark:border-white/15 dark:bg-zinc-900"
                       />
                     </label>
+                    <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                      LinkedIn link (required)
+                      <input
+                        type="text"
+                        value={linkedinPromptValue}
+                        onChange={(e) => setLinkedinPromptValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") submitAddPrompt(item);
+                          if (e.key === "Escape") setAddPromptId(null);
+                        }}
+                        placeholder="https://linkedin.com/in/..."
+                        className="w-64 rounded border border-black/15 px-2 py-1.5 text-xs dark:border-white/15 dark:bg-zinc-900"
+                      />
+                    </label>
                     <button
-                      onClick={submitEmailPrompt}
-                      disabled={!isValidEmail(emailPromptValue.trim())}
+                      onClick={() => submitAddPrompt(item)}
+                      disabled={!isValidEmail(emailPromptValue.trim()) || !linkedinPromptValue.trim()}
                       className="rounded-full bg-foreground px-4 py-1.5 text-xs font-medium text-background disabled:opacity-40"
                     >
                       Continue
                     </button>
                     <button
-                      onClick={() => setEmailPrompt(null)}
+                      onClick={() => setAddPromptId(null)}
                       className="rounded-full border border-black/15 px-4 py-1.5 text-xs font-medium dark:border-white/15"
                     >
                       Cancel
