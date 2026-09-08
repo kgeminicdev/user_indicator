@@ -34,13 +34,15 @@ function loadWorkingHistory(
   from: string,
   to: string,
   readFilter: TriState,
-  interviewedFilter: TriState
+  interviewedFilter: TriState,
+  email: string
 ): Promise<WorkingHistoryPage> {
   const params = new URLSearchParams({ page: String(page) });
   if (from) params.set("from", from);
   if (to) params.set("to", to);
   if (readFilter !== "any") params.set("read", readFilter);
   if (interviewedFilter !== "any") params.set("interviewed", interviewedFilter);
+  if (email) params.set("email", email);
   return fetch(`/api/working-history?${params}`).then((res) => {
     if (!res.ok) throw new Error(`request failed (${res.status})`);
     return res.json();
@@ -53,10 +55,11 @@ function todayStr(): string {
   return new Date(d.getTime() - offset * 60000).toISOString().slice(0, 10);
 }
 
-function loadRecordStats(from: string, to: string): Promise<RecordStats> {
+function loadRecordStats(from: string, to: string, email: string): Promise<RecordStats> {
   const params = new URLSearchParams();
   if (from) params.set("from", from);
   if (to) params.set("to", to);
+  if (email) params.set("email", email);
   return fetch(`/api/working-history/stats?${params}`).then((res) => {
     if (!res.ok) throw new Error(`request failed (${res.status})`);
     return res.json();
@@ -68,6 +71,8 @@ export default function WorkingHistoryPage() {
   const [to, setTo] = useState("");
   const [readFilter, setReadFilter] = useState<TriState>("any");
   const [interviewedFilter, setInterviewedFilter] = useState<TriState>("any");
+  const [emailInput, setEmailInput] = useState("");
+  const [emailFilter, setEmailFilter] = useState("");
   const [data, setData] = useState<WorkingHistoryPage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -83,23 +88,29 @@ export default function WorkingHistoryPage() {
   function refresh(page: number) {
     setLoading(true);
     setError(null);
-    loadWorkingHistory(page, from, to, readFilter, interviewedFilter)
+    loadWorkingHistory(page, from, to, readFilter, interviewedFilter, emailFilter)
       .then(setData)
       .catch((err) => setError((err as Error).message))
       .finally(() => setLoading(false));
   }
 
   function refreshStats() {
-    loadRecordStats(from, to)
+    loadRecordStats(from, to, emailFilter)
       .then(setRecordStats)
       .catch(() => {});
   }
+
+  // Debounce the email box so typing doesn't fire a request per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setEmailFilter(emailInput.trim()), 300);
+    return () => clearTimeout(t);
+  }, [emailInput]);
 
   useEffect(() => {
     refresh(1);
     refreshStats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to, readFilter, interviewedFilter]);
+  }, [from, to, readFilter, interviewedFilter, emailFilter]);
 
   async function handleUndo(item: WorkingHistoryItem) {
     const ok = window.confirm(
@@ -160,6 +171,16 @@ export default function WorkingHistoryPage() {
 
         <div className="flex flex-wrap items-end gap-3 rounded-lg border border-black/10 p-4 dark:border-white/10">
           <label className="flex flex-col gap-1 text-sm">
+            Email
+            <input
+              type="text"
+              value={emailInput}
+              onChange={(e) => setEmailInput(e.target.value)}
+              placeholder="Search email"
+              className="w-48 rounded border border-black/15 px-3 py-2 text-sm dark:border-white/15 dark:bg-zinc-900"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
             From
             <input
               type="date"
@@ -215,13 +236,14 @@ export default function WorkingHistoryPage() {
           >
             Today
           </button>
-          {(from || to || readFilter !== "any" || interviewedFilter !== "any") && (
+          {(from || to || readFilter !== "any" || interviewedFilter !== "any" || emailInput) && (
             <button
               onClick={() => {
                 setFrom("");
                 setTo("");
                 setReadFilter("any");
                 setInterviewedFilter("any");
+                setEmailInput("");
               }}
               className="rounded-full border border-black/15 px-4 py-2 text-xs font-medium dark:border-white/15"
             >
@@ -234,18 +256,20 @@ export default function WorkingHistoryPage() {
           {data && (
             <StatBlock
               value={data.total}
-              label={from || to ? "applied in range" : "applied total"}
+              label={from || to || emailFilter ? "applied matching filters" : "applied total"}
             />
           )}
           {recordStats && (
             <>
               <StatBlock
                 value={recordStats.read}
-                label={from || to ? "read in range" : "read total"}
+                label={from || to || emailFilter ? "read matching filters" : "read total"}
               />
               <StatBlock
                 value={recordStats.interviewed}
-                label={from || to ? "interviewed in range" : "interviewed total"}
+                label={
+                  from || to || emailFilter ? "interviewed matching filters" : "interviewed total"
+                }
               />
             </>
           )}

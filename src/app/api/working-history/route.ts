@@ -11,6 +11,7 @@ export async function GET(request: NextRequest) {
   const to = request.nextUrl.searchParams.get("to");
   const readFilter = request.nextUrl.searchParams.get("read");
   const interviewedFilter = request.nextUrl.searchParams.get("interviewed");
+  const email = request.nextUrl.searchParams.get("email");
 
   const conditions: string[] = [];
   const params: unknown[] = [];
@@ -21,6 +22,10 @@ export async function GET(request: NextRequest) {
   if (to) {
     params.push(to);
     conditions.push(`created_at < ($${params.length}::date + interval '1 day')`);
+  }
+  if (email) {
+    params.push(`%${email}%`);
+    conditions.push(`email ILIKE $${params.length}`);
   }
   if (readFilter === "yes") {
     conditions.push(`read_at IS NOT NULL`);

@@ -6,7 +6,12 @@ import { pool } from "@/lib/db";
 // and the table itself use — not by when they were read/interviewed, so all
 // three stats answer the same question: "of who was applied to in this
 // range, how many are read/interviewed."
-function dateFilter(statusColumn: string, from: string | null, to: string | null) {
+function dateFilter(
+  statusColumn: string,
+  from: string | null,
+  to: string | null,
+  email: string | null
+) {
   const conditions: string[] = [`${statusColumn} IS NOT NULL`];
   const params: unknown[] = [];
   if (from) {
@@ -17,15 +22,20 @@ function dateFilter(statusColumn: string, from: string | null, to: string | null
     params.push(to);
     conditions.push(`created_at < ($${params.length}::date + interval '1 day')`);
   }
+  if (email) {
+    params.push(`%${email}%`);
+    conditions.push(`email ILIKE $${params.length}`);
+  }
   return { where: conditions.join(" AND "), params };
 }
 
 export async function GET(request: NextRequest) {
   const from = request.nextUrl.searchParams.get("from");
   const to = request.nextUrl.searchParams.get("to");
+  const email = request.nextUrl.searchParams.get("email");
 
-  const readQuery = dateFilter("read_at", from, to);
-  const interviewedQuery = dateFilter("interviewed_at", from, to);
+  const readQuery = dateFilter("read_at", from, to, email);
+  const interviewedQuery = dateFilter("interviewed_at", from, to, email);
 
   const [readResult, interviewedResult] = await Promise.all([
     pool.query(`SELECT count(*)::int AS total FROM working_history WHERE ${readQuery.where}`, readQuery.params),
