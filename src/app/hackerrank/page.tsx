@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState } from "react";
+import VeeProfilePanel from "@/components/VeeProfilePanel";
 import { notify } from "@/components/Toast";
 
 const MAX_AUTO_RESUME_ATTEMPTS = 5;
@@ -113,6 +114,7 @@ export default function HackerRankPage() {
   const [addPromptId, setAddPromptId] = useState<number | null>(null);
   const [emailPromptValue, setEmailPromptValue] = useState("");
   const [linkedinPromptValue, setLinkedinPromptValue] = useState("");
+  const [selectedLinkedinUrl, setSelectedLinkedinUrl] = useState<string | null>(null);
 
   const autoResumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoResumeAttemptsRef = useRef(0);
@@ -145,6 +147,10 @@ export default function HackerRankPage() {
       .then(setSavedMatches)
       .catch(() => {})
       .finally(() => setSavedMatchesLoading(false));
+  }
+
+  function handleViewClick(linkedinUrl: string) {
+    setSelectedLinkedinUrl(linkedinUrl);
   }
 
   function handleAddClick(m: SavedMatch) {
@@ -288,7 +294,8 @@ export default function HackerRankPage() {
   }
 
   return (
-    <div className="flex flex-col min-h-screen items-center bg-zinc-50 font-sans dark:bg-black">
+    <div className="flex min-h-screen bg-zinc-50 font-sans dark:bg-black">
+      <div className="flex flex-1 justify-center">
       <main className="flex w-full max-w-4xl flex-col gap-8 py-16 px-6">
         <div>
           <h1 className="text-2xl font-semibold text-black dark:text-zinc-50">
@@ -506,21 +513,31 @@ export default function HackerRankPage() {
                           )}
                         </td>
                         <td className="px-3 py-2">
-                          <button
-                            onClick={() => handleAddClick(m)}
-                            disabled={
-                              addingId === m.id || m.already_in_records || m.added_to_todo
-                            }
-                            className="rounded-full bg-foreground px-3 py-1.5 text-xs font-medium text-background disabled:opacity-40"
-                          >
-                            {addingId === m.id
-                              ? "Adding..."
-                              : m.already_in_records
-                                ? "Already in Records"
-                                : m.added_to_todo
-                                  ? "Added to To Do ✓"
-                                  : "Add to To Do"}
-                          </button>
+                          <div className="flex flex-nowrap items-center gap-2">
+                            {m.linkedin_url && (
+                              <button
+                                onClick={() => handleViewClick(m.linkedin_url as string)}
+                                className="whitespace-nowrap rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
+                              >
+                                View
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handleAddClick(m)}
+                              disabled={
+                                addingId === m.id || m.already_in_records || m.added_to_todo
+                              }
+                              className="whitespace-nowrap rounded-full bg-foreground px-3 py-1.5 text-xs font-medium text-background disabled:opacity-40"
+                            >
+                              {addingId === m.id
+                                ? "Adding..."
+                                : m.already_in_records
+                                  ? "Already in Records"
+                                  : m.added_to_todo
+                                    ? "Added to To Do ✓"
+                                    : "Add to To Do"}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                       {addPromptId === m.id && (
@@ -614,6 +631,24 @@ export default function HackerRankPage() {
           )}
         </div>
       </main>
+      </div>
+      {selectedLinkedinUrl && (
+        <aside className="sticky top-0 h-screen w-1/2 shrink-0 overflow-y-auto border-l border-black/10 bg-white dark:border-white/10 dark:bg-zinc-950">
+          <VeeProfilePanel
+            profileUrl={selectedLinkedinUrl}
+            email={null}
+            source="hackerrank"
+            onClose={() => setSelectedLinkedinUrl(null)}
+            onAlreadyExists={() => {
+              setSelectedLinkedinUrl(null);
+              refreshSavedMatches(savedMatches?.page ?? 1);
+            }}
+            onQueued={() => {
+              refreshSavedMatches(savedMatches?.page ?? 1);
+            }}
+          />
+        </aside>
+      )}
     </div>
   );
 }
