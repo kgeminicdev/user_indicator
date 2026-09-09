@@ -54,6 +54,7 @@ export default function TodoPage() {
   const [stats, setStats] = useState<TodoStats | null>(null);
   const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
   const copiedEmailTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [applyingAll, setApplyingAll] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -121,6 +122,36 @@ export default function TodoPage() {
     }
   }
 
+  async function handleApplyAll() {
+    const count = data?.total ?? 0;
+    if (count === 0) return;
+    const ok = window.confirm(
+      `Mark all ${count} candidates in To Do as applied? This moves everyone to records and working history. This cannot be undone.`
+    );
+    if (!ok) return;
+
+    setApplyingAll(true);
+    try {
+      const res = await fetch("/api/todo-entries/apply-all", { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `request failed (${res.status})`);
+      if (body.failed > 0) {
+        notify(
+          `Applied ${body.applied} of ${body.total} — ${body.failed} failed: ${body.failures[0]}`,
+          "error"
+        );
+      } else {
+        notify(`Applied all ${body.applied} candidates`, "success");
+      }
+      await refresh(1);
+      refreshStats();
+    } catch (err) {
+      notify(`Error applying all: ${(err as Error).message}`, "error");
+    } finally {
+      setApplyingAll(false);
+    }
+  }
+
   async function handleGetContent(entry: TodoEntry) {
     setFetchingId(entry.id);
     try {
@@ -183,13 +214,22 @@ export default function TodoPage() {
               them to records and working history; Remove discards them.
             </p>
           </div>
-          {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- file download, not a page navigation */}
-          <a
-            href="/api/todo-entries/export"
-            className="whitespace-nowrap rounded-full border border-black/15 px-4 py-2 text-sm font-medium dark:border-white/15"
-          >
-            Download Excel
-          </a>
+          <div className="flex shrink-0 flex-nowrap items-center gap-2">
+            {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- file download, not a page navigation */}
+            <a
+              href="/api/todo-entries/export"
+              className="whitespace-nowrap rounded-full border border-black/15 px-4 py-2 text-sm font-medium dark:border-white/15"
+            >
+              Download Excel
+            </a>
+            <button
+              onClick={handleApplyAll}
+              disabled={applyingAll || !data?.total}
+              className="whitespace-nowrap rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-40"
+            >
+              {applyingAll ? "Applying..." : "Done All"}
+            </button>
+          </div>
         </div>
 
         {stats && (
