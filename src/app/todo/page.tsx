@@ -171,16 +171,25 @@ export default function TodoPage() {
   return (
     <div className="flex flex-col min-h-screen items-center bg-zinc-50 font-sans dark:bg-black">
       <main className="flex w-full max-w-4xl flex-col gap-8 py-16 px-6">
-        <div>
-          <h1 className="text-2xl font-semibold text-black dark:text-zinc-50">
-            To Do
-          </h1>
-          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-            Candidates staged from GitHub, Braintrust, and HackerRank. Content is fetched from
-            LinkedIn in the background — use &quot;Get content&quot; to fetch it now instead of
-            waiting. Copy and Applied copies the email and content to your clipboard and moves
-            them to records and working history; Remove discards them.
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold text-black dark:text-zinc-50">
+              To Do
+            </h1>
+            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+              Candidates staged from GitHub, Braintrust, and HackerRank. Content is fetched from
+              LinkedIn in the background — use &quot;Get content&quot; to fetch it now instead of
+              waiting. Copy and Applied copies the email and content to your clipboard and moves
+              them to records and working history; Remove discards them.
+            </p>
+          </div>
+          {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- file download, not a page navigation */}
+          <a
+            href="/api/todo-entries/export"
+            className="whitespace-nowrap rounded-full border border-black/15 px-4 py-2 text-sm font-medium dark:border-white/15"
+          >
+            Download Excel
+          </a>
         </div>
 
         {stats && (
