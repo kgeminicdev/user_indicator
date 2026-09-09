@@ -18,18 +18,6 @@ const VEE_PROXY_LIST = (process.env.VEE_PROXY_LIST ?? "")
   .map((entry) => entry.trim())
   .filter(Boolean);
 
-// A single Webshare "rotating" gateway endpoint (host:port, e.g.
-// p.webshare.io:80), tried after the static list — Webshare assigns a
-// different backend exit IP per fresh connection through this one endpoint,
-// so it's a useful fallback when the static list above is having a bad day.
-const VEE_PROXY_USERNAME = process.env.VEE_PROXY_USERNAME;
-const VEE_PROXY_PASSWORD = process.env.VEE_PROXY_PASSWORD;
-const VEE_PROXY_ROTATING_HOST = process.env.VEE_PROXY_ROTATING_HOST;
-const ROTATING_PROXY_AUTHORITY =
-  VEE_PROXY_USERNAME && VEE_PROXY_PASSWORD && VEE_PROXY_ROTATING_HOST
-    ? `${VEE_PROXY_USERNAME}:${VEE_PROXY_PASSWORD}@${VEE_PROXY_ROTATING_HOST}`
-    : null;
-
 // Mirrors the lookup service's response shape 1:1 (snake_case, as returned)
 // — deliberately excludes the `usage`/`freshness` fields, which carry
 // account/billing details (including an upgrade link with an embedded
@@ -122,23 +110,21 @@ export class VeeProfileError extends Error {
   }
 }
 
-const hasProxyConfig = VEE_PROXY_LIST.length > 0 || ROTATING_PROXY_AUTHORITY !== null;
+const hasProxyConfig = VEE_PROXY_LIST.length > 0;
 
-// Each proxy attempt (static list entry or a rotating-gateway connection)
-// only needs to prove that IP is reachable and has credits, so it gets a
-// short timeout — a live proxy connects almost instantly. The direct
-// (non-proxied) attempt is the true last resort and gets much more room: a
-// fresh, not-yet-cached profile genuinely takes Vee a while to scrape, and
-// cutting that off at the same short timeout would fail a request that was
-// actually working.
+// Each proxy attempt only needs to prove that IP is reachable and has
+// credits, so it gets a short timeout — a live proxy connects almost
+// instantly. The direct (non-proxied) attempt is the true last resort and
+// gets much more room: a fresh, not-yet-cached profile genuinely takes Vee
+// a while to scrape, and cutting that off at the same short timeout would
+// fail a request that was actually working.
 const VEE_PROXY_TIMEOUT_MS = 8000;
 const VEE_DIRECT_TIMEOUT_MS = 45000;
 
-// Bounds worst-case latency when a whole tier is having a bad day (this has
-// happened — the entire static list, and separately the entire rotating
-// pool, have each been observed fully exhausted/unreachable at once).
+// Bounds worst-case latency when the whole list is having a bad day (this
+// has happened — the entire static list has been observed fully
+// exhausted/unreachable at once).
 const MAX_LIST_ATTEMPTS = 8;
-const MAX_ROTATING_ATTEMPTS = 5;
 
 // The lookup service expects just the profile slug (e.g.
 // "lukas-steiblys-4583561a"), not the full profile URL — sending the full
@@ -165,13 +151,9 @@ function buildHeaders(): Record<string, string> {
   return headers;
 }
 
-// A fresh ProxyAgent (and thus a fresh TCP connection) per attempt matters
-// most for the rotating gateway — reusing one connection keeps the same
-// exit IP for as long as it stays alive, defeating rotation — but building
-// one per call uniformly here also keeps this function simple for static
-// list entries. The response body is read and rebuffered into a plain
-// Response before the agent is closed, so closing it right after doesn't
-// risk cutting off a body the caller hasn't read yet.
+// The response body is read and rebuffered into a plain Response before the
+// agent is closed, so closing it right after the fetch resolves doesn't risk
+// cutting off a body the caller hasn't read yet.
 async function fetchViaProxy(
   url: string,
   headers: Record<string, string>,
@@ -204,14 +186,7 @@ export async function fetchVeeProfile(profileUrl: string): Promise<VeeProfileDat
   url.searchParams.set("sections", VEE_SECTIONS);
   const headers = buildHeaders();
 
-  // Static list entries first (each already known to be a real proxy
-  // server), then the rotating gateway as a second tier — each rotating
-  // attempt is a fresh connection, so repeating the same authority string
-  // still tries a different exit IP each time.
-  const proxyCandidates: string[] = [
-    ...VEE_PROXY_LIST.slice(0, MAX_LIST_ATTEMPTS),
-    ...(ROTATING_PROXY_AUTHORITY ? Array(MAX_ROTATING_ATTEMPTS).fill(ROTATING_PROXY_AUTHORITY) : []),
-  ];
+  const proxyCandidates: string[] = VEE_PROXY_LIST.slice(0, MAX_LIST_ATTEMPTS);
 
   let response: Response | undefined;
   let lastError: VeeProfileError | undefined;
@@ -289,9 +264,8 @@ export async function fetchVeeUsage(): Promise<VeeUsage> {
   const headers = buildHeaders();
 
   // Just reports whichever endpoint would be tried first for a real lookup
-  // — with a static list configured that's its first entry, otherwise the
-  // rotating gateway, otherwise direct.
-  const authority = VEE_PROXY_LIST[0] ?? ROTATING_PROXY_AUTHORITY ?? null;
+  // — the first configured proxy, otherwise direct.
+  const authority = VEE_PROXY_LIST[0] ?? null;
 
   let response: Response;
   try {
@@ -346,11 +320,8 @@ export async function fetchVeeUsage(): Promise<VeeUsage> {
       typeof common.realtime_ops_limit === "number" ? common.realtime_ops_limit : null,
     concurrentLimit:
       typeof common.concurrent_limit === "number" ? common.concurrent_limit : null,
-    // Strip credentials — only the host:port (plus a "(rotating)" suffix
-    // when applicable) is ever reported to the client.
-    currentProxyIp: authority
-      ? `${authority.split("@").pop()}${authority === ROTATING_PROXY_AUTHORITY ? " (rotating)" : ""}`
-      : null,
+    // Strip credentials — only the host:port is ever reported to the client.
+    currentProxyIp: authority ? authority.split("@").pop() ?? null : null,
     proxyIpCount: VEE_PROXY_LIST.length,
   };
 }
