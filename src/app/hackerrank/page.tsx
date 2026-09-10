@@ -71,6 +71,7 @@ type SavedMatch = {
   skill: string | null;
   already_in_records: boolean;
   added_to_todo: boolean;
+  ignored: boolean;
   created_at: string;
 };
 
@@ -93,8 +94,10 @@ function loadHistory(): Promise<ScanHistoryItem[]> {
   });
 }
 
-function loadSavedMatches(page: number): Promise<SavedMatchesPage> {
-  return fetch(`/api/hackerrank/matches?page=${page}`).then((res) => {
+function loadSavedMatches(page: number, showIgnored: boolean): Promise<SavedMatchesPage> {
+  const params = new URLSearchParams({ page: String(page) });
+  if (showIgnored) params.set("showIgnored", "true");
+  return fetch(`/api/hackerrank/matches?${params}`).then((res) => {
     if (!res.ok) throw new Error(`request failed (${res.status})`);
     return res.json();
   });
@@ -114,7 +117,9 @@ export default function HackerRankPage() {
   const [addPromptId, setAddPromptId] = useState<number | null>(null);
   const [emailPromptValue, setEmailPromptValue] = useState("");
   const [linkedinPromptValue, setLinkedinPromptValue] = useState("");
+  const [showIgnored, setShowIgnored] = useState(false);
   const [selectedLinkedinUrl, setSelectedLinkedinUrl] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
 
   const autoResumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoResumeAttemptsRef = useRef(0);
@@ -133,7 +138,8 @@ export default function HackerRankPage() {
 
   useEffect(() => {
     refreshSavedMatches(1);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showIgnored]);
 
   function refreshHistory() {
     loadHistory()
@@ -143,14 +149,29 @@ export default function HackerRankPage() {
 
   function refreshSavedMatches(page: number) {
     setSavedMatchesLoading(true);
-    return loadSavedMatches(page)
+    return loadSavedMatches(page, showIgnored)
       .then(setSavedMatches)
       .catch(() => {})
       .finally(() => setSavedMatchesLoading(false));
   }
 
-  function handleViewClick(linkedinUrl: string) {
+  async function handleIgnore(id: number, ignore: boolean) {
+    try {
+      const res = await fetch(`/api/hackerrank/matches/${id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: ignore ? "ignore" : "unignore" }),
+      });
+      if (!res.ok) throw new Error(`request failed (${res.status})`);
+      await refreshSavedMatches(savedMatches?.page ?? 1);
+    } catch (err) {
+      notify(`Error ${ignore ? "ignoring" : "unignoring"}: ${(err as Error).message}`, "error");
+    }
+  }
+
+  function handleViewClick(m: SavedMatch, linkedinUrl: string) {
     setSelectedLinkedinUrl(linkedinUrl);
+    setSelectedId(m.id);
   }
 
   function handleAddClick(m: SavedMatch) {
@@ -194,7 +215,9 @@ export default function HackerRankPage() {
         body.exists ? `Already in records: ${name}` : `Added to To Do: ${name}`,
         "success"
       );
-      await refreshSavedMatches(savedMatches?.page ?? 1);
+      // Copy, don't move — the hackerrank_matches row stays, just hidden
+      // from the default view (same as GitHub's ignore-on-apply).
+      await handleIgnore(m.id, true);
     } catch (err) {
       notify(`Error adding: ${(err as Error).message}`, "error");
     } finally {
@@ -416,9 +439,19 @@ export default function HackerRankPage() {
         )}
 
         <div className="flex flex-col gap-3">
-          <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-            Saved Matches
-          </h2>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              Saved Matches
+            </h2>
+            <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
+              <input
+                type="checkbox"
+                checked={showIgnored}
+                onChange={(e) => setShowIgnored(e.target.checked)}
+              />
+              Show ignored
+            </label>
+          </div>
 
           {savedMatchesLoading && <p className="text-sm text-zinc-500">Loading...</p>}
 
@@ -442,7 +475,9 @@ export default function HackerRankPage() {
                     {savedMatches.items.map((m) => (
                       <Fragment key={m.id}>
                       <tr
-                        className="border-b border-black/5 last:border-0 dark:border-white/5"
+                        className={`border-b border-black/5 last:border-0 dark:border-white/5 ${
+                          m.ignored ? "opacity-50" : ""
+                        }`}
                       >
                         <td className="px-3 py-2">
                           <a
@@ -516,7 +551,7 @@ export default function HackerRankPage() {
                           <div className="flex flex-nowrap items-center gap-2">
                             {m.linkedin_url ? (
                               <button
-                                onClick={() => handleViewClick(m.linkedin_url as string)}
+                                onClick={() => handleViewClick(m, m.linkedin_url as string)}
                                 className="whitespace-nowrap rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
                               >
                                 View
@@ -543,6 +578,12 @@ export default function HackerRankPage() {
                                   : m.added_to_todo
                                     ? "Added to To Do ✓"
                                     : "Add to To Do"}
+                            </button>
+                            <button
+                              onClick={() => handleIgnore(m.id, !m.ignored)}
+                              className="whitespace-nowrap rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
+                            >
+                              {m.ignored ? "Unignore" : "Ignore"}
                             </button>
                           </div>
                         </td>
@@ -645,13 +686,17 @@ export default function HackerRankPage() {
             profileUrl={selectedLinkedinUrl}
             email={null}
             source="hackerrank"
-            onClose={() => setSelectedLinkedinUrl(null)}
+            onClose={() => {
+              setSelectedLinkedinUrl(null);
+              setSelectedId(null);
+            }}
             onAlreadyExists={() => {
               setSelectedLinkedinUrl(null);
               refreshSavedMatches(savedMatches?.page ?? 1);
             }}
             onQueued={() => {
-              refreshSavedMatches(savedMatches?.page ?? 1);
+              // Copy, don't move — same as the row-level Add to To Do.
+              if (selectedId != null) handleIgnore(selectedId, true);
             }}
           />
         </aside>
