@@ -94,9 +94,14 @@ function loadHistory(): Promise<ScanHistoryItem[]> {
   });
 }
 
-function loadSavedMatches(page: number, showIgnored: boolean): Promise<SavedMatchesPage> {
+function loadSavedMatches(
+  page: number,
+  showIgnored: boolean,
+  showAdded: boolean
+): Promise<SavedMatchesPage> {
   const params = new URLSearchParams({ page: String(page) });
   if (showIgnored) params.set("showIgnored", "true");
+  if (showAdded) params.set("showAdded", "true");
   return fetch(`/api/hackerrank/matches?${params}`).then((res) => {
     if (!res.ok) throw new Error(`request failed (${res.status})`);
     return res.json();
@@ -118,6 +123,7 @@ export default function HackerRankPage() {
   const [emailPromptValue, setEmailPromptValue] = useState("");
   const [linkedinPromptValue, setLinkedinPromptValue] = useState("");
   const [showIgnored, setShowIgnored] = useState(false);
+  const [showAdded, setShowAdded] = useState(false);
   const [selectedLinkedinUrl, setSelectedLinkedinUrl] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
@@ -139,7 +145,7 @@ export default function HackerRankPage() {
   useEffect(() => {
     refreshSavedMatches(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showIgnored]);
+  }, [showIgnored, showAdded]);
 
   function refreshHistory() {
     loadHistory()
@@ -149,7 +155,7 @@ export default function HackerRankPage() {
 
   function refreshSavedMatches(page: number) {
     setSavedMatchesLoading(true);
-    return loadSavedMatches(page, showIgnored)
+    return loadSavedMatches(page, showIgnored, showAdded)
       .then(setSavedMatches)
       .catch(() => {})
       .finally(() => setSavedMatchesLoading(false));
@@ -443,14 +449,24 @@ export default function HackerRankPage() {
             <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
               Saved Matches
             </h2>
-            <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
-              <input
-                type="checkbox"
-                checked={showIgnored}
-                onChange={(e) => setShowIgnored(e.target.checked)}
-              />
-              Show ignored
-            </label>
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
+                <input
+                  type="checkbox"
+                  checked={showAdded}
+                  onChange={(e) => setShowAdded(e.target.checked)}
+                />
+                Show added to To Do
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
+                <input
+                  type="checkbox"
+                  checked={showIgnored}
+                  onChange={(e) => setShowIgnored(e.target.checked)}
+                />
+                Show ignored
+              </label>
+            </div>
           </div>
 
           {savedMatchesLoading && <p className="text-sm text-zinc-500">Loading...</p>}
@@ -547,19 +563,19 @@ export default function HackerRankPage() {
                             "—"
                           )}
                         </td>
-                        <td className="px-3 py-2">
-                          <div className="flex flex-nowrap items-center gap-2">
+                        <td className="px-2 py-2">
+                          <div className="flex flex-nowrap items-center gap-1.5">
                             {m.linkedin_url ? (
                               <button
                                 onClick={() => handleViewClick(m, m.linkedin_url as string)}
-                                className="whitespace-nowrap rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
+                                className="whitespace-nowrap rounded-full border border-black/15 px-2.5 py-1.5 text-xs font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
                               >
                                 View
                               </button>
                             ) : (
                               <span
                                 aria-hidden
-                                className="invisible whitespace-nowrap rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium"
+                                className="invisible whitespace-nowrap rounded-full border border-black/15 px-2.5 py-1.5 text-xs font-medium"
                               >
                                 View
                               </span>
@@ -569,19 +585,19 @@ export default function HackerRankPage() {
                               disabled={
                                 addingId === m.id || m.already_in_records || m.added_to_todo
                               }
-                              className="whitespace-nowrap rounded-full bg-foreground px-3 py-1.5 text-xs font-medium text-background disabled:opacity-40"
+                              className="whitespace-nowrap rounded-full bg-foreground px-2.5 py-1.5 text-xs font-medium text-background disabled:opacity-40"
                             >
                               {addingId === m.id
                                 ? "Adding..."
                                 : m.already_in_records
                                   ? "Already in Records"
                                   : m.added_to_todo
-                                    ? "Added to To Do ✓"
+                                    ? "Added ✓"
                                     : "Add to To Do"}
                             </button>
                             <button
                               onClick={() => handleIgnore(m.id, !m.ignored)}
-                              className="whitespace-nowrap rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
+                              className="whitespace-nowrap rounded-full border border-black/15 px-2.5 py-1.5 text-xs font-medium text-zinc-600 dark:border-white/15 dark:text-zinc-400"
                             >
                               {m.ignored ? "Unignore" : "Ignore"}
                             </button>

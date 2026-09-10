@@ -9,10 +9,12 @@ export async function GET(request: NextRequest) {
   const offset = (page - 1) * PAGE_SIZE;
   const showAlreadyInRecords = request.nextUrl.searchParams.get("showAlreadyInRecords") === "true";
   const showIgnored = request.nextUrl.searchParams.get("showIgnored") === "true";
+  const showAdded = request.nextUrl.searchParams.get("showAdded") === "true";
 
   const conditions: string[] = [];
   if (!showAlreadyInRecords) conditions.push("already_in_records = false");
   if (!showIgnored) conditions.push("ignored = false");
+  if (!showAdded) conditions.push("added_to_todo = false");
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
   const [itemsResult, countResult] = await Promise.all([
