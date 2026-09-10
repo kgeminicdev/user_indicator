@@ -123,11 +123,10 @@ const VEE_DIRECT_TIMEOUT_MS = 45000;
 
 // Bounds worst-case latency when the whole list is having a bad day (this
 // has happened — the entire static list has been observed fully
-// exhausted/unreachable at once). Kept fairly high since the list now
-// includes free public proxies, which are far less reliable than the paid
-// ones — most attempts against a dead one fail fast, so this rarely means
-// paying the full timeout that many times over.
-const MAX_LIST_ATTEMPTS = 15;
+// exhausted/unreachable at once). The list is now pruned to entries that
+// tested reliable, so this just needs to cover its full length rather than
+// wade through a long tail of known-dead free proxies.
+const MAX_LIST_ATTEMPTS = 12;
 
 // The lookup service expects just the profile slug (e.g.
 // "lukas-steiblys-4583561a"), not the full profile URL — sending the full
