@@ -123,10 +123,11 @@ const VEE_DIRECT_TIMEOUT_MS = 45000;
 
 // Bounds worst-case latency when the whole list is having a bad day (this
 // has happened — the entire static list has been observed fully
-// exhausted/unreachable at once). The list is now pruned to entries that
-// tested reliable, so this just needs to cover its full length rather than
-// wade through a long tail of known-dead free proxies.
-const MAX_LIST_ATTEMPTS = 12;
+// exhausted/unreachable at once). The list is now just the paid Webshare
+// entries, all of which have tested 100% reliable across every check run
+// against them — free public proxies were dropped entirely after even the
+// survivors from the first prune showed occasional connection failures.
+const MAX_LIST_ATTEMPTS = 10;
 
 // The lookup service expects just the profile slug (e.g.
 // "lukas-steiblys-4583561a"), not the full profile URL — sending the full
