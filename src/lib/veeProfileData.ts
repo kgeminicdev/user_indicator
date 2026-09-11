@@ -2,6 +2,7 @@
 // (Veezee) lookup service — never forward the response anywhere but this
 // app's own UI.
 import { ProxyAgent, fetch as undiciFetch } from "undici";
+import { pool } from "@/lib/db";
 
 const VEE_API_URL = process.env.VEE_API_URL + "linkedin/profiles" || "http://localhost:5000/profiles";
 const VEE_USAGE_URL = process.env.VEE_API_URL + "usage" || "http://localhost:5001/usage";
@@ -154,6 +155,73 @@ function buildHeaders(): Record<string, string> {
   return headers;
 }
 
+// Credentials never leave this module past this point — every candidate is
+// tracked and reported by its host:port alone.
+function hostPortOf(authority: string): string {
+  return authority.split("@").pop() ?? authority;
+}
+
+// The free tier resets daily — round to the next UTC midnight so a marked
+// entry naturally becomes eligible again without any separate cleanup job.
+function nextMidnightUtc(): Date {
+  const d = new Date();
+  d.setUTCHours(24, 0, 0, 0);
+  return d;
+}
+
+// Reads which configured entries are currently known-exhausted (persisted in
+// vee_proxy_ips, so this survives server restarts and — critically — is
+// shared across every request today instead of every request rediscovering
+// the same exhausted entries from scratch via a live 403. Credit usage
+// across a list this size is never even: whichever entries happen to be
+// tried first burn through their daily cap first, and without this, every
+// later request keeps re-paying the cost of testing them anyway. Failing to
+// reach the DB just means "treat nothing as known-exhausted" rather than
+// blocking lookups outright.
+async function loadExhaustedUntil(hostPorts: string[]): Promise<Map<string, Date>> {
+  if (hostPorts.length === 0) return new Map();
+  try {
+    const result = await pool.query<{ ip: string; exhausted_until: Date | null }>(
+      `SELECT ip, exhausted_until FROM vee_proxy_ips WHERE ip = ANY($1)`,
+      [hostPorts]
+    );
+    const map = new Map<string, Date>();
+    for (const row of result.rows) {
+      if (row.exhausted_until) map.set(row.ip, new Date(row.exhausted_until));
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+async function markExhausted(hostPort: string): Promise<void> {
+  await pool
+    .query(
+      `INSERT INTO vee_proxy_ips (ip, exhausted_until, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (ip) DO UPDATE SET exhausted_until = EXCLUDED.exhausted_until, updated_at = now()`,
+      [hostPort, nextMidnightUtc()]
+    )
+    .catch(() => {});
+}
+
+// Ordered candidates worth actually trying right now — entries already
+// known-exhausted today are skipped so a request never pays to rediscover
+// that live. Falls back to the full list if every entry is marked
+// exhausted, since the persisted state could be stale (e.g. credits topped
+// up off-cycle, or a previous day's marks not yet expired).
+async function pickCandidates(): Promise<string[]> {
+  if (VEE_PROXY_LIST.length === 0) return [];
+  const now = new Date();
+  const exhaustedUntil = await loadExhaustedUntil(VEE_PROXY_LIST.map(hostPortOf));
+  const live = VEE_PROXY_LIST.filter((authority) => {
+    const until = exhaustedUntil.get(hostPortOf(authority));
+    return !until || until <= now;
+  });
+  return live.length > 0 ? live : VEE_PROXY_LIST;
+}
+
 // The response body is read and rebuffered into a plain Response before the
 // agent is closed, so closing it right after the fetch resolves doesn't risk
 // cutting off a body the caller hasn't read yet.
@@ -189,7 +257,7 @@ export async function fetchVeeProfile(profileUrl: string): Promise<VeeProfileDat
   url.searchParams.set("sections", VEE_SECTIONS);
   const headers = buildHeaders();
 
-  const proxyCandidates: string[] = VEE_PROXY_LIST.slice(0, MAX_LIST_ATTEMPTS);
+  const proxyCandidates: string[] = (await pickCandidates()).slice(0, MAX_LIST_ATTEMPTS);
 
   let response: Response | undefined;
   let lastError: VeeProfileError | undefined;
@@ -206,6 +274,7 @@ export async function fetchVeeProfile(profileUrl: string): Promise<VeeProfileDat
     }
 
     if (response.status === 403) {
+      await markExhausted(hostPortOf(authority));
       response = undefined;
       continue;
     }
@@ -267,8 +336,9 @@ export async function fetchVeeUsage(): Promise<VeeUsage> {
   const headers = buildHeaders();
 
   // Just reports whichever endpoint would be tried first for a real lookup
-  // — the first configured proxy, otherwise direct.
-  const authority = VEE_PROXY_LIST[0] ?? null;
+  // — the first non-known-exhausted proxy, otherwise direct.
+  const candidates = await pickCandidates();
+  const authority = candidates[0] ?? null;
 
   let response: Response;
   try {
@@ -300,6 +370,13 @@ export async function fetchVeeUsage(): Promise<VeeUsage> {
   const freeTier = common.free_tier as Record<string, unknown> | undefined;
   const remainingToday =
     freeTier && typeof freeTier.remaining_today === "number" ? freeTier.remaining_today : null;
+
+  // This entry's daily credits are exhausted — mark it now so the next
+  // profile lookup (and the next usage check) skips it without needing to
+  // discover that itself via a live 403.
+  if (authority && remainingToday !== null && remainingToday <= 0) {
+    await markExhausted(hostPortOf(authority));
+  }
 
   return {
     plan: typeof common.plan === "string" ? common.plan : null,
