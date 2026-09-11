@@ -292,7 +292,15 @@ export async function fetchVeeProfile(profileUrl: string): Promise<VeeProfileDat
       );
       response = undefined;
     }
-    if (response && response.status === 403) response = undefined;
+    if (response && response.status === 403) {
+      response = undefined;
+      // The true final reason is exhaustion, not whatever unrelated proxy
+      // error happened earlier in the loop — clear it so the generic
+      // exhaustion message below is shown instead of a stale, misleading
+      // one (e.g. "via proxy: timeout" when the actual blocker is that
+      // every avenue, direct included, is simply out of credits today).
+      lastError = undefined;
+    }
   }
 
   if (!response) {
