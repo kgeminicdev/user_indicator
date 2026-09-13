@@ -97,11 +97,13 @@ function loadHistory(): Promise<ScanHistoryItem[]> {
 function loadSavedMatches(
   page: number,
   showIgnored: boolean,
-  showAdded: boolean
+  showAdded: boolean,
+  skillFilter: string
 ): Promise<SavedMatchesPage> {
   const params = new URLSearchParams({ page: String(page) });
   if (showIgnored) params.set("showIgnored", "true");
   if (showAdded) params.set("showAdded", "true");
+  if (skillFilter) params.set("skill", skillFilter);
   return fetch(`/api/hackerrank/matches?${params}`).then((res) => {
     if (!res.ok) throw new Error(`request failed (${res.status})`);
     return res.json();
@@ -124,6 +126,7 @@ export default function HackerRankPage() {
   const [linkedinPromptValue, setLinkedinPromptValue] = useState("");
   const [showIgnored, setShowIgnored] = useState(false);
   const [showAdded, setShowAdded] = useState(false);
+  const [skillFilter, setSkillFilter] = useState("");
   const [selectedLinkedinUrl, setSelectedLinkedinUrl] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
@@ -145,7 +148,7 @@ export default function HackerRankPage() {
   useEffect(() => {
     refreshSavedMatches(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showIgnored, showAdded]);
+  }, [showIgnored, showAdded, skillFilter]);
 
   function refreshHistory() {
     loadHistory()
@@ -155,7 +158,7 @@ export default function HackerRankPage() {
 
   function refreshSavedMatches(page: number) {
     setSavedMatchesLoading(true);
-    return loadSavedMatches(page, showIgnored, showAdded)
+    return loadSavedMatches(page, showIgnored, showAdded, skillFilter)
       .then(setSavedMatches)
       .catch(() => {})
       .finally(() => setSavedMatchesLoading(false));
@@ -322,6 +325,8 @@ export default function HackerRankPage() {
     startStream(new URLSearchParams({ resumeId: String(id) }));
   }
 
+  const knownSkills = Array.from(new Set(history.map((h) => h.skill))).sort();
+
   return (
     <div className="flex min-h-screen bg-zinc-50 font-sans dark:bg-black">
       <div className="flex flex-1 justify-center">
@@ -450,6 +455,21 @@ export default function HackerRankPage() {
               Saved Matches
             </h2>
             <div className="flex items-center gap-3">
+              <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
+                Skill
+                <select
+                  value={skillFilter}
+                  onChange={(e) => setSkillFilter(e.target.value)}
+                  className="rounded border border-black/15 px-2 py-1 text-xs dark:border-white/15 dark:bg-zinc-900"
+                >
+                  <option value="">All skills</option>
+                  {knownSkills.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
                 <input
                   type="checkbox"
