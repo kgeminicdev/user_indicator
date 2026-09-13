@@ -205,6 +205,39 @@ async function markExhausted(hostPort: string): Promise<void> {
     .catch(() => {});
 }
 
+// LinkedIn profiles don't meaningfully change hour to hour, so a fetch is
+// reused for a month before it's considered stale enough to re-spend a
+// credit on. This is what actually stops "View" and "Get content" (or the
+// background refill job) from each paying for the same person separately.
+const PROFILE_CACHE_TTL_DAYS = 30;
+
+async function loadCachedProfile(identifier: string): Promise<VeeProfileData | null> {
+  try {
+    const result = await pool.query<{ data: VeeProfileData; fetched_at: Date }>(
+      `SELECT data, fetched_at FROM vee_profile_cache WHERE identifier = $1`,
+      [identifier]
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    const ageMs = Date.now() - new Date(row.fetched_at).getTime();
+    if (ageMs > PROFILE_CACHE_TTL_DAYS * 24 * 60 * 60 * 1000) return null;
+    return row.data;
+  } catch {
+    return null;
+  }
+}
+
+async function saveCachedProfile(identifier: string, data: VeeProfileData): Promise<void> {
+  await pool
+    .query(
+      `INSERT INTO vee_profile_cache (identifier, data, fetched_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (identifier) DO UPDATE SET data = EXCLUDED.data, fetched_at = now()`,
+      [identifier, JSON.stringify(data)]
+    )
+    .catch(() => {});
+}
+
 // Ordered candidates worth actually trying right now — entries already
 // known-exhausted today are skipped so a request never pays to rediscover
 // that live. Falls back to the full list if every entry is marked
@@ -251,6 +284,10 @@ async function fetchDirect(url: string, headers: Record<string, string>): Promis
 
 export async function fetchVeeProfile(profileUrl: string): Promise<VeeProfileData> {
   const identifier = extractLinkedinIdentifier(profileUrl);
+
+  const cached = await loadCachedProfile(identifier);
+  if (cached) return cached;
+
   const url = new URL(VEE_API_URL);
   url.searchParams.set("identifier", identifier);
   url.searchParams.set("sections", VEE_SECTIONS);
@@ -331,12 +368,14 @@ export async function fetchVeeProfile(profileUrl: string): Promise<VeeProfileDat
   // carries an upgrade link with an embedded account token, the same class
   // of sensitive data /usage's whitelist already excludes. Only the actual
   // profile content is returned.
-  return {
+  const profile: VeeProfileData = {
     canonical_url: rawBody.canonical_url,
     data_as_of: rawBody.data_as_of,
     common: rawBody.common,
     platform_fields: rawBody.platform_fields,
   };
+  await saveCachedProfile(identifier, profile);
+  return profile;
 }
 
 export async function fetchVeeUsage(): Promise<VeeUsage> {

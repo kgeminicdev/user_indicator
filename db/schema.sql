@@ -112,6 +112,17 @@ CREATE TABLE IF NOT EXISTS vee_proxy_ips (
 ALTER TABLE vee_proxy_ips ADD COLUMN IF NOT EXISTS credits_used_today INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE vee_proxy_ips ADD COLUMN IF NOT EXISTS credits_used_date DATE;
 
+-- Caches fetchVeeProfile results by LinkedIn identifier so the same person
+-- is never fetched from Vee twice within the freshness window — e.g.
+-- viewing a candidate's profile and later fetching their To Do content
+-- would otherwise each cost a separate live (credit-spending) request for
+-- the same profile.
+CREATE TABLE IF NOT EXISTS vee_profile_cache (
+  identifier   TEXT PRIMARY KEY,
+  data         JSONB NOT NULL,
+  fetched_at   TIMESTAMP NOT NULL DEFAULT now()
+);
+
 -- Persisted HackerRank leaderboard matches (contact-info found), deduped by
 -- hacker username — a later scan skips anyone already here instead of
 -- re-fetching and re-verifying them.
