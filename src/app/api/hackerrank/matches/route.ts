@@ -23,7 +23,15 @@ export async function GET(request: NextRequest) {
               rank, score, skill, already_in_records, added_to_todo, ignored, created_at
        FROM hackerrank_matches
        ${whereClause}
-       ORDER BY id DESC
+       ORDER BY
+         (resume_url IS NOT NULL) DESC,
+         (
+           (website IS NOT NULL)::int +
+           (linkedin_url IS NOT NULL)::int +
+           (github_url IS NOT NULL)::int +
+           (resume_url IS NOT NULL)::int
+         ) DESC,
+         id DESC
        LIMIT $1 OFFSET $2`,
       [PAGE_SIZE, offset]
     ),
