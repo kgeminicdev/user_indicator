@@ -12,6 +12,7 @@ type Candidate = {
   id: number;
   publicName: string | null;
   externalProfiles: ExternalProfile[];
+  avatarUrl: string | null;
 };
 
 export async function POST(request: NextRequest) {
@@ -28,7 +29,8 @@ export async function POST(request: NextRequest) {
 
   const { rows: candidates } = await braintrustPool.query<Candidate>(
     `
-      SELECT id, "publicName", data->'external_profiles' AS "externalProfiles"
+      SELECT id, "publicName", data->'external_profiles' AS "externalProfiles",
+             data->'user'->>'avatar' AS "avatarUrl"
       FROM "Freelancer"
       WHERE id BETWEEN $1 AND $2
         AND ${BRAINTRUST_FILTER}
@@ -53,6 +55,7 @@ export async function POST(request: NextRequest) {
     linkedinVerified: boolean | null;
     externalProfiles: ExternalProfile[];
     derivedEmail: string | null;
+    avatarUrl: string | null;
     matched: boolean;
   };
 
@@ -86,6 +89,7 @@ export async function POST(request: NextRequest) {
             linkedinVerified,
             externalProfiles: profiles,
             derivedEmail: null,
+            avatarUrl: candidate.avatarUrl,
             matched: true,
           };
         }
@@ -111,6 +115,7 @@ export async function POST(request: NextRequest) {
           linkedinVerified,
           externalProfiles: profiles,
           derivedEmail,
+          avatarUrl: candidate.avatarUrl,
           matched,
         };
       })
@@ -123,8 +128,8 @@ export async function POST(request: NextRequest) {
   let newlyQueued = 0;
   for (const r of missing) {
     const insertResult = await pool.query(
-      `INSERT INTO scanned_braintrust (braintrust_id, name, github_url, linkedin_url, linkedin_verified, external_profiles, derived_email)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO scanned_braintrust (braintrust_id, name, github_url, linkedin_url, linkedin_verified, external_profiles, derived_email, avatar_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (braintrust_id) DO UPDATE
          SET status = 'pending',
              name = EXCLUDED.name,
@@ -132,7 +137,8 @@ export async function POST(request: NextRequest) {
              linkedin_url = EXCLUDED.linkedin_url,
              linkedin_verified = EXCLUDED.linkedin_verified,
              external_profiles = EXCLUDED.external_profiles,
-             derived_email = EXCLUDED.derived_email
+             derived_email = EXCLUDED.derived_email,
+             avatar_url = EXCLUDED.avatar_url
          WHERE scanned_braintrust.status = 'dismissed'`,
       [
         r.braintrustId,
@@ -142,6 +148,7 @@ export async function POST(request: NextRequest) {
         r.linkedinVerified,
         JSON.stringify(r.externalProfiles),
         r.derivedEmail,
+        r.avatarUrl,
       ]
     );
     newlyQueued += insertResult.rowCount ?? 0;

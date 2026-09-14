@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS scanned_braintrust (
 );
 
 ALTER TABLE scanned_braintrust ADD COLUMN IF NOT EXISTS linkedin_verified BOOLEAN;
+ALTER TABLE scanned_braintrust ADD COLUMN IF NOT EXISTS avatar_url TEXT;
 
 CREATE TABLE IF NOT EXISTS github_us (
   id                    SERIAL PRIMARY KEY,

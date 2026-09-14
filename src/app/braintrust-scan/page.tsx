@@ -15,6 +15,7 @@ type TodoItem = {
   linkedin_verified: boolean | null;
   external_profiles: ExternalProfile[] | null;
   derived_email: string | null;
+  avatar_url: string | null;
   status: string;
   created_at: string;
 };
@@ -428,7 +429,10 @@ export default function BraintrustScanPage() {
             {items.map((item) => {
               const linkedinUrl = resolveLinkedinUrl(item);
               const githubUrl = resolveGithubUrl(item);
-              const rawAvatarUrl = githubAvatarUrl(githubUrl);
+              // Prefer the candidate's real Braintrust profile photo — it
+              // covers far more candidates than deriving one from a GitHub
+              // link, which only exists for some.
+              const rawAvatarUrl = item.avatar_url || githubAvatarUrl(githubUrl);
               const avatarUrl = brokenAvatarIds.has(item.id) ? null : rawAvatarUrl;
               return (
                 <div
@@ -447,7 +451,8 @@ export default function BraintrustScanPage() {
                         avatarUrl ? "cursor-pointer" : ""
                       }`}
                       onClick={() =>
-                        avatarUrl && setLightboxUrl(githubAvatarUrl(githubUrl, 460))
+                        avatarUrl &&
+                        setLightboxUrl(item.avatar_url || githubAvatarUrl(githubUrl, 460))
                       }
                       onError={() => {
                         setBrokenAvatarIds((prev) => {
