@@ -160,9 +160,11 @@ export default function HackerRankPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [brokenAvatarIds, setBrokenAvatarIds] = useState<Set<number>>(new Set());
+  const [copiedLinkedinUrl, setCopiedLinkedinUrl] = useState<string | null>(null);
 
   const autoResumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoResumeAttemptsRef = useRef(0);
+  const copiedLinkedinTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!lightboxUrl) return;
@@ -176,6 +178,7 @@ export default function HackerRankPage() {
   useEffect(() => {
     return () => {
       if (autoResumeTimerRef.current) clearTimeout(autoResumeTimerRef.current);
+      if (copiedLinkedinTimerRef.current) clearTimeout(copiedLinkedinTimerRef.current);
     };
   }, []);
 
@@ -221,6 +224,18 @@ export default function HackerRankPage() {
   function handleViewClick(m: SavedMatch, linkedinUrl: string) {
     setSelectedLinkedinUrl(linkedinUrl);
     setSelectedId(m.id);
+  }
+
+  async function handleCopyLinkedin(linkedinUrl: string) {
+    try {
+      await navigator.clipboard.writeText(linkedinUrl);
+    } catch {
+      // Clipboard access can fail (permissions, insecure context) — the
+      // "Copied" feedback below is best-effort either way.
+    }
+    if (copiedLinkedinTimerRef.current) clearTimeout(copiedLinkedinTimerRef.current);
+    setCopiedLinkedinUrl(linkedinUrl);
+    copiedLinkedinTimerRef.current = setTimeout(() => setCopiedLinkedinUrl(null), 1500);
   }
 
   function handleAddClick(m: SavedMatch) {
@@ -612,14 +627,12 @@ export default function HackerRankPage() {
                         </td>
                         <td className="px-3 py-2">
                           {m.linkedin_url ? (
-                            <a
-                              href={m.linkedin_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
+                            <button
+                              onClick={() => handleCopyLinkedin(m.linkedin_url as string)}
                               className="text-blue-600 underline dark:text-blue-400"
                             >
-                              LinkedIn
-                            </a>
+                              {copiedLinkedinUrl === m.linkedin_url ? "Copied ✓" : "LinkedIn"}
+                            </button>
                           ) : (
                             "—"
                           )}
