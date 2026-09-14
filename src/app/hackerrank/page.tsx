@@ -8,6 +8,32 @@ const MAX_AUTO_RESUME_ATTEMPTS = 5;
 const GENERIC_RETRY_BASE_MS = 30000;
 const GENERIC_RETRY_MAX_MS = 120000;
 
+// Flat gray silhouette shown when a GitHub username has no avatar or turns
+// out to be stale/deleted (some HackerRank-scraped GitHub links 404).
+const DEFAULT_AVATAR =
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 140">` +
+      `<circle cx="70" cy="70" r="70" fill="#EBEBEB"/>` +
+      `<circle cx="70" cy="52" r="26" fill="#BDBDBD"/>` +
+      `<path d="M18 138c0-32.5 23.3-58.8 52-58.8s52 26.3 52 58.8" fill="#BDBDBD"/>` +
+      `</svg>`
+  );
+
+// GitHub serves a user's avatar directly at this URL — no API call (and no
+// rate limit) needed, unlike fetching it via the GitHub API.
+function githubAvatarUrl(githubUrl: string | null): string | null {
+  if (!githubUrl) return null;
+  try {
+    const parsed = new URL(githubUrl);
+    if (!parsed.hostname.includes("github.com")) return null;
+    const [username] = parsed.pathname.split("/").filter(Boolean);
+    return username ? `https://github.com/${username}.png?size=64` : null;
+  } catch {
+    return null;
+  }
+}
+
 type NewItem = {
   hacker: string;
   name: string | null;
@@ -497,6 +523,7 @@ export default function HackerRankPage() {
                 <table className="w-full text-left text-sm">
                   <thead className="border-b border-black/10 bg-black/[.02] text-xs text-zinc-500 dark:border-white/10 dark:bg-white/[.03] dark:text-zinc-400">
                     <tr>
+                      <th className="whitespace-nowrap px-3 py-2 font-medium">Avatar</th>
                       <th className="whitespace-nowrap px-3 py-2 font-medium">Hacker</th>
                       <th className="whitespace-nowrap px-3 py-2 font-medium">Name</th>
                       <th className="whitespace-nowrap px-3 py-2 font-medium">Skill</th>
@@ -515,6 +542,21 @@ export default function HackerRankPage() {
                           m.ignored ? "opacity-50" : ""
                         }`}
                       >
+                        <td className="px-3 py-2">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={githubAvatarUrl(m.github_url) ?? DEFAULT_AVATAR}
+                            alt=""
+                            width={28}
+                            height={28}
+                            className="rounded-full bg-black/10 dark:bg-white/10"
+                            onError={(e) => {
+                              // Stale/deleted GitHub username (404) — fall
+                              // back to the placeholder silhouette.
+                              e.currentTarget.src = DEFAULT_AVATAR;
+                            }}
+                          />
+                        </td>
                         <td className="px-3 py-2">
                           <a
                             href={`https://www.hackerrank.com/${m.hacker}`}
@@ -626,7 +668,7 @@ export default function HackerRankPage() {
                       </tr>
                       {addPromptId === m.id && (
                         <tr className="border-b border-black/5 bg-black/[.02] dark:border-white/5 dark:bg-white/[.03]">
-                          <td colSpan={8} className="px-3 py-3">
+                          <td colSpan={9} className="px-3 py-3">
                             <div className="flex flex-wrap items-end gap-3">
                               <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
                                 Email (required)
