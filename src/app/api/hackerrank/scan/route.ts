@@ -26,6 +26,11 @@ type ProfileModel = {
   github_url?: string | null;
   show_profile_resume?: boolean | null;
   resume?: { resume_url?: string | null } | null;
+  // has_avatar_url distinguishes a real uploaded photo from HackerRank's
+  // generic placeholder gravatar, which every profile otherwise reports in
+  // `avatar` regardless of whether the user ever set one.
+  avatar?: string | null;
+  has_avatar_url?: boolean | null;
 };
 
 function isValidUrl(value: string): boolean {
@@ -207,6 +212,9 @@ export async function GET(request: NextRequest) {
                       ? profile.resume.resume_url
                       : null;
 
+                  const avatarUrl =
+                    profile.has_avatar_url && profile.avatar ? profile.avatar : null;
+
                   if (!website && !githubUrl && !linkedinUrl && !resumeUrl) return;
 
                   const alreadyKnown = Boolean(
@@ -218,15 +226,16 @@ export async function GET(request: NextRequest) {
 
                   await pool.query(
                     `INSERT INTO hackerrank_matches
-                       (hacker, hacker_id, name, website, linkedin_url, github_url, resume_url, rank, score, skill, already_in_records)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                       (hacker, hacker_id, name, website, linkedin_url, github_url, resume_url, rank, score, skill, already_in_records, avatar_url)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                      ON CONFLICT (hacker) DO UPDATE
                        SET name = EXCLUDED.name,
                            website = EXCLUDED.website,
                            linkedin_url = EXCLUDED.linkedin_url,
                            github_url = EXCLUDED.github_url,
                            resume_url = EXCLUDED.resume_url,
-                           already_in_records = EXCLUDED.already_in_records`,
+                           already_in_records = EXCLUDED.already_in_records,
+                           avatar_url = EXCLUDED.avatar_url`,
                     [
                       h.hacker,
                       h.hacker_id,
@@ -239,6 +248,7 @@ export async function GET(request: NextRequest) {
                       h.score,
                       skill,
                       alreadyKnown,
+                      avatarUrl,
                     ]
                   );
 

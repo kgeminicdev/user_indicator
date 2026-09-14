@@ -101,6 +101,7 @@ type SavedMatch = {
   already_in_records: boolean;
   added_to_todo: boolean;
   ignored: boolean;
+  avatar_url: string | null;
   created_at: string;
 };
 
@@ -572,7 +573,11 @@ export default function HackerRankPage() {
                       >
                         <td className="px-3 py-2">
                           {(() => {
-                            const rawAvatarUrl = githubAvatarUrl(m.github_url);
+                            // Prefer the candidate's real HackerRank profile
+                            // photo — covers more candidates than deriving
+                            // one from a GitHub link, which only exists for
+                            // some.
+                            const rawAvatarUrl = m.avatar_url || githubAvatarUrl(m.github_url);
                             const avatarUrl = brokenAvatarIds.has(m.id) ? null : rawAvatarUrl;
                             return (
                               // eslint-disable-next-line @next/next/no-img-element
@@ -585,12 +590,14 @@ export default function HackerRankPage() {
                                   avatarUrl ? "cursor-pointer" : ""
                                 }`}
                                 onClick={() =>
-                                  avatarUrl && setLightboxUrl(githubAvatarUrl(m.github_url, 460))
+                                  avatarUrl &&
+                                  setLightboxUrl(m.avatar_url || githubAvatarUrl(m.github_url, 460))
                                 }
                                 onError={() => {
-                                  // Stale/deleted GitHub username (404) —
-                                  // fall back to the placeholder silhouette
-                                  // and disable the zoom click for this row.
+                                  // Stale/deleted avatar or GitHub username
+                                  // (404) — fall back to the placeholder
+                                  // silhouette and disable the zoom click
+                                  // for this row.
                                   setBrokenAvatarIds((prev) => {
                                     if (prev.has(m.id)) return prev;
                                     return new Set(prev).add(m.id);

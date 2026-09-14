@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
   const [itemsResult, countResult] = await Promise.all([
     pool.query(
       `SELECT id, hacker, hacker_id, name, website, linkedin_url, github_url, resume_url,
-              rank, score, skill, already_in_records, added_to_todo, ignored, created_at
+              rank, score, skill, already_in_records, added_to_todo, ignored, avatar_url, created_at
        FROM hackerrank_matches
        ${whereClause}
        ORDER BY

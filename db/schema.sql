@@ -144,6 +144,7 @@ CREATE TABLE IF NOT EXISTS hackerrank_matches (
   created_at            TIMESTAMP NOT NULL DEFAULT now()
 );
 ALTER TABLE hackerrank_matches ADD COLUMN IF NOT EXISTS ignored BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE hackerrank_matches ADD COLUMN IF NOT EXISTS avatar_url TEXT;
 
 -- Checkpointed HackerRank scan progress, same resumable pattern as
 -- github_us_searches — a scan across many leaderboard pages can be
