@@ -158,6 +158,8 @@ export default function GithubSearchPage() {
     name: string | null;
   } | null>(null);
   const [emailPromptValue, setEmailPromptValue] = useState("");
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [brokenAvatars, setBrokenAvatars] = useState<Set<string>>(new Set());
 
   const autoResumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoResumeAttemptsRef = useRef(0);
@@ -171,6 +173,15 @@ export default function GithubSearchPage() {
       if (copiedEmailTimerRef.current) clearTimeout(copiedEmailTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (!lightboxUrl) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setLightboxUrl(null);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [lightboxUrl]);
 
   useEffect(() => {
     loadHistory()
@@ -573,11 +584,19 @@ export default function GithubSearchPage() {
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={user.avatarUrl}
+                    src={brokenAvatars.has(user.avatarUrl) ? "" : user.avatarUrl}
                     alt=""
                     width={32}
                     height={32}
-                    className="rounded-full"
+                    className="cursor-pointer rounded-full bg-black/10 dark:bg-white/10"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (!brokenAvatars.has(user.avatarUrl)) setLightboxUrl(user.avatarUrl);
+                    }}
+                    onError={() =>
+                      setBrokenAvatars((prev) => new Set(prev).add(user.avatarUrl))
+                    }
                   />
                   <div className="flex flex-1 flex-col">
                     <span className="font-medium text-black dark:text-zinc-50">
@@ -793,11 +812,23 @@ export default function GithubSearchPage() {
                   <div className="flex items-center gap-3">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={u.avatar_url ?? ""}
+                      src={u.avatar_url && !brokenAvatars.has(u.avatar_url) ? u.avatar_url : ""}
                       alt=""
                       width={32}
                       height={32}
-                      className="rounded-full bg-black/10 dark:bg-white/10"
+                      className={`rounded-full bg-black/10 dark:bg-white/10 ${
+                        u.avatar_url ? "cursor-pointer" : ""
+                      }`}
+                      onClick={() => {
+                        if (u.avatar_url && !brokenAvatars.has(u.avatar_url)) {
+                          setLightboxUrl(u.avatar_url);
+                        }
+                      }}
+                      onError={() => {
+                        if (u.avatar_url) {
+                          setBrokenAvatars((prev) => new Set(prev).add(u.avatar_url as string));
+                        }
+                      }}
                     />
                     <div className="flex flex-1 flex-col">
                       <a
@@ -983,6 +1014,19 @@ export default function GithubSearchPage() {
             }}
           />
         </aside>
+      )}
+      {lightboxUrl && (
+        <div
+          onClick={() => setLightboxUrl(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-8"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={lightboxUrl}
+            alt=""
+            className="max-h-full max-w-full rounded-lg shadow-2xl"
+          />
+        </div>
       )}
     </div>
   );
