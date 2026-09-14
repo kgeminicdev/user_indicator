@@ -50,6 +50,41 @@ function resolveLinkedinUrl(item: TodoItem): string | null {
   );
 }
 
+function resolveGithubUrl(item: TodoItem): string | null {
+  return (
+    item.github_url ||
+    item.external_profiles?.find((p) => p.site?.name === "GitHub")?.public_url ||
+    null
+  );
+}
+
+// GitHub serves a user's avatar directly at this URL — no API call (and no
+// rate limit) needed. `size` controls the resolution GitHub renders — small
+// for the card thumbnail, much larger for the click-to-zoom lightbox.
+function githubAvatarUrl(githubUrl: string | null, size: number = 64): string | null {
+  if (!githubUrl) return null;
+  try {
+    const parsed = new URL(githubUrl);
+    if (!parsed.hostname.includes("github.com")) return null;
+    const [username] = parsed.pathname.split("/").filter(Boolean);
+    return username ? `https://github.com/${username}.png?size=${size}` : null;
+  } catch {
+    return null;
+  }
+}
+
+// Flat gray silhouette shown when there's no GitHub link, or the derived
+// avatar URL turns out to be stale/deleted (404).
+const DEFAULT_AVATAR =
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 140">` +
+      `<circle cx="70" cy="70" r="70" fill="#EBEBEB"/>` +
+      `<circle cx="70" cy="52" r="26" fill="#BDBDBD"/>` +
+      `<path d="M18 138c0-32.5 23.3-58.8 52-58.8s52 26.3 52 58.8" fill="#BDBDBD"/>` +
+      `</svg>`
+  );
+
 function isValidEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
@@ -81,6 +116,17 @@ export default function BraintrustScanPage() {
   const [addPromptId, setAddPromptId] = useState<number | null>(null);
   const [emailPromptValue, setEmailPromptValue] = useState("");
   const [linkedinPromptValue, setLinkedinPromptValue] = useState("");
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [brokenAvatarIds, setBrokenAvatarIds] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    if (!lightboxUrl) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setLightboxUrl(null);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [lightboxUrl]);
 
   function applyTodoPage(data: TodoPageResult) {
     setItems(data.items);
@@ -381,13 +427,36 @@ export default function BraintrustScanPage() {
           <div className="flex flex-col gap-3">
             {items.map((item) => {
               const linkedinUrl = resolveLinkedinUrl(item);
+              const githubUrl = resolveGithubUrl(item);
+              const rawAvatarUrl = githubAvatarUrl(githubUrl);
+              const avatarUrl = brokenAvatarIds.has(item.id) ? null : rawAvatarUrl;
               return (
                 <div
                   key={item.id}
                   className="flex flex-col gap-3 rounded-lg border border-black/10 p-4 text-sm dark:border-white/10"
                 >
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={avatarUrl ?? DEFAULT_AVATAR}
+                      alt=""
+                      width={36}
+                      height={36}
+                      className={`shrink-0 rounded-full bg-black/10 dark:bg-white/10 ${
+                        avatarUrl ? "cursor-pointer" : ""
+                      }`}
+                      onClick={() =>
+                        avatarUrl && setLightboxUrl(githubAvatarUrl(githubUrl, 460))
+                      }
+                      onError={() => {
+                        setBrokenAvatarIds((prev) => {
+                          if (prev.has(item.id)) return prev;
+                          return new Set(prev).add(item.id);
+                        });
+                      }}
+                    />
+                    <div className="min-w-0 flex-1">
                     <div className="font-medium text-black dark:text-zinc-50">
                       {item.name || "—"}
                     </div>
@@ -448,6 +517,7 @@ export default function BraintrustScanPage() {
                         {applyErrors[item.id]}
                       </div>
                     )}
+                    </div>
                   </div>
                   <div className="flex shrink-0 flex-nowrap items-center justify-end gap-2">
                     {linkedinUrl && (
@@ -575,6 +645,19 @@ export default function BraintrustScanPage() {
             }}
           />
         </aside>
+      )}
+      {lightboxUrl && (
+        <div
+          onClick={() => setLightboxUrl(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-8"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={lightboxUrl}
+            alt=""
+            className="max-h-full max-w-full rounded-lg shadow-2xl"
+          />
+        </div>
       )}
     </div>
   );
