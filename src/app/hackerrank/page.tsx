@@ -21,14 +21,17 @@ const DEFAULT_AVATAR =
   );
 
 // GitHub serves a user's avatar directly at this URL — no API call (and no
-// rate limit) needed, unlike fetching it via the GitHub API.
-function githubAvatarUrl(githubUrl: string | null): string | null {
+// rate limit) needed, unlike fetching it via the GitHub API. `size` controls
+// the resolution GitHub renders — a small one for the table thumbnail, a
+// much larger one for the click-to-zoom lightbox so it isn't just an
+// upscaled, blurry version of the thumbnail.
+function githubAvatarUrl(githubUrl: string | null, size: number = 64): string | null {
   if (!githubUrl) return null;
   try {
     const parsed = new URL(githubUrl);
     if (!parsed.hostname.includes("github.com")) return null;
     const [username] = parsed.pathname.split("/").filter(Boolean);
-    return username ? `https://github.com/${username}.png?size=64` : null;
+    return username ? `https://github.com/${username}.png?size=${size}` : null;
   } catch {
     return null;
   }
@@ -155,9 +158,20 @@ export default function HackerRankPage() {
   const [skillFilter, setSkillFilter] = useState("");
   const [selectedLinkedinUrl, setSelectedLinkedinUrl] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [brokenAvatarIds, setBrokenAvatarIds] = useState<Set<number>>(new Set());
 
   const autoResumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoResumeAttemptsRef = useRef(0);
+
+  useEffect(() => {
+    if (!lightboxUrl) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setLightboxUrl(null);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [lightboxUrl]);
 
   useEffect(() => {
     return () => {
@@ -524,7 +538,6 @@ export default function HackerRankPage() {
                   <thead className="border-b border-black/10 bg-black/[.02] text-xs text-zinc-500 dark:border-white/10 dark:bg-white/[.03] dark:text-zinc-400">
                     <tr>
                       <th className="whitespace-nowrap px-3 py-2 font-medium">Avatar</th>
-                      <th className="whitespace-nowrap px-3 py-2 font-medium">Hacker</th>
                       <th className="whitespace-nowrap px-3 py-2 font-medium">Name</th>
                       <th className="whitespace-nowrap px-3 py-2 font-medium">Skill</th>
                       <th className="whitespace-nowrap px-3 py-2 font-medium">Website</th>
@@ -543,19 +556,34 @@ export default function HackerRankPage() {
                         }`}
                       >
                         <td className="px-3 py-2">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={githubAvatarUrl(m.github_url) ?? DEFAULT_AVATAR}
-                            alt=""
-                            width={28}
-                            height={28}
-                            className="rounded-full bg-black/10 dark:bg-white/10"
-                            onError={(e) => {
-                              // Stale/deleted GitHub username (404) — fall
-                              // back to the placeholder silhouette.
-                              e.currentTarget.src = DEFAULT_AVATAR;
-                            }}
-                          />
+                          {(() => {
+                            const rawAvatarUrl = githubAvatarUrl(m.github_url);
+                            const avatarUrl = brokenAvatarIds.has(m.id) ? null : rawAvatarUrl;
+                            return (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={avatarUrl ?? DEFAULT_AVATAR}
+                                alt=""
+                                width={28}
+                                height={28}
+                                className={`rounded-full bg-black/10 dark:bg-white/10 ${
+                                  avatarUrl ? "cursor-pointer" : ""
+                                }`}
+                                onClick={() =>
+                                  avatarUrl && setLightboxUrl(githubAvatarUrl(m.github_url, 460))
+                                }
+                                onError={() => {
+                                  // Stale/deleted GitHub username (404) —
+                                  // fall back to the placeholder silhouette
+                                  // and disable the zoom click for this row.
+                                  setBrokenAvatarIds((prev) => {
+                                    if (prev.has(m.id)) return prev;
+                                    return new Set(prev).add(m.id);
+                                  });
+                                }}
+                              />
+                            );
+                          })()}
                         </td>
                         <td className="px-3 py-2">
                           <a
@@ -564,10 +592,9 @@ export default function HackerRankPage() {
                             rel="noopener noreferrer"
                             className="text-blue-600 underline dark:text-blue-400"
                           >
-                            {m.hacker}
+                            {m.name || m.hacker}
                           </a>
                         </td>
-                        <td className="px-3 py-2">{m.name ?? "—"}</td>
                         <td className="px-3 py-2 text-zinc-500">{m.skill ?? "—"}</td>
                         <td className="px-3 py-2">
                           {m.website ? (
@@ -668,7 +695,7 @@ export default function HackerRankPage() {
                       </tr>
                       {addPromptId === m.id && (
                         <tr className="border-b border-black/5 bg-black/[.02] dark:border-white/5 dark:bg-white/[.03]">
-                          <td colSpan={9} className="px-3 py-3">
+                          <td colSpan={8} className="px-3 py-3">
                             <div className="flex flex-wrap items-end gap-3">
                               <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
                                 Email (required)
@@ -778,6 +805,19 @@ export default function HackerRankPage() {
             }}
           />
         </aside>
+      )}
+      {lightboxUrl && (
+        <div
+          onClick={() => setLightboxUrl(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-8"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={lightboxUrl}
+            alt=""
+            className="max-h-full max-w-full rounded-lg shadow-2xl"
+          />
+        </div>
       )}
     </div>
   );
